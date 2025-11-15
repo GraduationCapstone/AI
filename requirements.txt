@@ -1,0 +1,30 @@
+# ===== FastAPI 서버 =====
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.5.0
+
+# ===== GitHub 수집 (LangChain) =====
+langchain>=0.1.0
+langchain-community>=0.0.20
+PyGithub>=1.59.1
+
+# ===== 텍스트 처리 =====
+beautifulsoup4>=4.12.0
+
+# ===== 임베딩 =====
+sentence-transformers>=2.2.2
+torch>=2.0.0
+
+# ===== 데이터베이스 (PostgreSQL + pgvector) =====
+psycopg2-binary>=2.9.9
+sqlalchemy>=2.0.23
+pgvector>=0.2.0
+
+# ===== AI (Claude + DSPy) =====
+anthropic>=0.18.0
+dspy-ai>=2.4.0
+
+# ===== 유틸리티 =====
+python-dotenv>=1.0.0
+pyyaml>=6.0.1
+requests>=2.31.0
