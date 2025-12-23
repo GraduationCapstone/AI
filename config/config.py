@@ -1,11 +1,11 @@
 """
-애플리케이션 설정 관리
+애플리케이션 설정 관리 (Dual AI Model)
 
-.env 파일에서 환경 변수를 로드하고 검증하는 역할.
+GPT OSS (Ollama) + Claude API 이중 모델 지원
 """
 
 import os
-from typing import Optional
+from typing import Optional, Literal
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
 import logging
@@ -18,14 +18,24 @@ load_dotenv()
 
 class Settings(BaseSettings):
     """
-    애플리케이션 설정
+    애플리케이션 설정 (Dual AI Model)
     
-    모든 환경 변수는 .env 파일에서 로드됩니다.
+    지원하는 AI 모델:
+    1. Claude API (Anthropic) - 외부 API, 높은 품질
+    2. GPT OSS (Ollama) - 로컬 실행, 무료
     """
     
-    # ===== Ollama 설정 =====
+    # ===== AI Models =====
+    # Claude API (Anthropic)
+    anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
+    claude_model: str = os.getenv("CLAUDE_MODEL", "claude-3-5-sonnet-20241022")
+    
+    # GPT OSS (Ollama)
     ollama_base_url: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-    ollama_model: str = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
+    ollama_model: str = os.getenv("OLLAMA_MODEL", "gpt-3.5-turbo")
+    
+    # AI 모드 선택
+    ai_model_mode: Literal["claude", "gpt", "both"] = os.getenv("AI_MODEL_MODE", "both")
     
     # ===== GitHub =====
     github_token: str = os.getenv("GITHUB_TOKEN", "")
@@ -71,10 +81,19 @@ class Settings(BaseSettings):
         Returns:
             str: http://localhost:11434/v1
         """
-        # /v1이 없으면 추가
         if not self.ollama_base_url.endswith("/v1"):
             return f"{self.ollama_base_url}/v1"
         return self.ollama_base_url
+    
+    @property
+    def is_claude_enabled(self) -> bool:
+        """Claude API 사용 가능 여부"""
+        return bool(self.anthropic_api_key) and self.ai_model_mode in ["claude", "both"]
+    
+    @property
+    def is_gpt_enabled(self) -> bool:
+        """GPT OSS 사용 가능 여부"""
+        return self.ai_model_mode in ["gpt", "both"]
     
     class Config:
         env_file = ".env"
@@ -94,11 +113,6 @@ def validate_settings() -> bool:
     
     Raises:
         ValueError: 필수 환경 변수가 없는 경우
-    
-    Example:
-        >>> from config import validate_settings
-        >>> validate_settings()
-        True
     """
     errors = []
     
@@ -110,12 +124,18 @@ def validate_settings() -> bool:
     if not settings.postgres_password:
         errors.append("POSTGRES_PASSWORD is not set (required for database connection)")
     
-    # Ollama 설정 검증
-    if not settings.ollama_base_url:
-        errors.append("OLLAMA_BASE_URL is not set")
+    # AI 모델 검증
+    if settings.ai_model_mode == "claude" or settings.ai_model_mode == "both":
+        if not settings.anthropic_api_key:
+            errors.append(
+                "ANTHROPIC_API_KEY is not set but AI_MODEL_MODE includes 'claude'"
+            )
     
-    if not settings.ollama_model:
-        errors.append("OLLAMA_MODEL is not set")
+    if settings.ai_model_mode == "gpt" or settings.ai_model_mode == "both":
+        if not settings.ollama_base_url:
+            errors.append("OLLAMA_BASE_URL is not set")
+        if not settings.ollama_model:
+            errors.append("OLLAMA_MODEL is not set")
     
     if errors:
         error_message = "Configuration errors:\n" + "\n".join(f"  - {e}" for e in errors)
@@ -123,6 +143,10 @@ def validate_settings() -> bool:
         raise ValueError(error_message)
     
     logger.info("Configuration validation successful")
+    logger.info(f"AI Model Mode: {settings.ai_model_mode}")
+    logger.info(f"  - Claude: {settings.is_claude_enabled}")
+    logger.info(f"  - GPT OSS: {settings.is_gpt_enabled}")
+    
     return True
 
 
@@ -149,22 +173,42 @@ def print_settings(mask_secrets: bool = True) -> None:
             return "***"
         return value[:show_chars] + "***"
     
-    print("\n=== PROBE Configuration ===")
-    print(f"Ollama Base URL: {settings.ollama_base_url}")
-    print(f"Ollama Model: {settings.ollama_model}")
-    print(f"GitHub Token: {mask(settings.github_token) if mask_secrets else settings.github_token}")
-    print(f"PostgreSQL Host: {settings.postgres_host}:{settings.postgres_port}")
-    print(f"PostgreSQL Database: {settings.postgres_db}")
-    print(f"PostgreSQL User: {settings.postgres_user}")
-    print(f"PostgreSQL Password: {mask(settings.postgres_password) if mask_secrets else settings.postgres_password}")
-    print(f"FastAPI: {settings.fastapi_host}:{settings.fastapi_port}")
+    print("\n=== PROBE Configuration (Dual AI Model) ===")
+    print("\n[AI Models]")
+    print(f"AI Model Mode: {settings.ai_model_mode}")
+    print(f"  Claude Enabled: {settings.is_claude_enabled}")
+    print(f"  GPT Enabled: {settings.is_gpt_enabled}")
+    
+    if settings.is_claude_enabled:
+        print(f"\n[Claude API]")
+        print(f"API Key: {mask(settings.anthropic_api_key) if mask_secrets else settings.anthropic_api_key}")
+        print(f"Model: {settings.claude_model}")
+    
+    if settings.is_gpt_enabled:
+        print(f"\n[GPT OSS (Ollama)]")
+        print(f"Base URL: {settings.ollama_base_url}")
+        print(f"Model: {settings.ollama_model}")
+    
+    print(f"\n[GitHub]")
+    print(f"Token: {mask(settings.github_token) if mask_secrets else settings.github_token}")
+    
+    print(f"\n[PostgreSQL]")
+    print(f"Host: {settings.postgres_host}:{settings.postgres_port}")
+    print(f"Database: {settings.postgres_db}")
+    print(f"User: {settings.postgres_user}")
+    print(f"Password: {mask(settings.postgres_password) if mask_secrets else settings.postgres_password}")
+    
+    print(f"\n[FastAPI]")
+    print(f"Host: {settings.fastapi_host}:{settings.fastapi_port}")
+    
+    print(f"\n[Other]")
     print(f"Embedding Model: {settings.embedding_model}")
     print(f"Log Level: {settings.log_level}")
     print(f"Database URL: {mask(settings.database_url) if mask_secrets else settings.database_url}")
-    print("=" * 30 + "\n")
+    print("=" * 50 + "\n")
 
 
-# 모듈 로드 시 자동 검증 
+# 모듈 로드 시 자동 검증 (선택 사항)
 if __name__ == "__main__":
     try:
         validate_settings()
