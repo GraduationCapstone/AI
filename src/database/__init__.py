@@ -76,7 +76,7 @@ pgvector 설정:
     ...     repo = session.query(Repository).first()
 """
 
-from .models import Base, Repository, CodeChunk, AnalysisResult
+from .models import Base, Repository, CodeChunk, TestScript
 from .db_manager import DatabaseManager
 
 __all__ = [
@@ -84,7 +84,7 @@ __all__ = [
     "Base",
     "Repository",
     "CodeChunk",
-    "AnalysisResult",
+    "TestScript",
     
     # Manager
     "DatabaseManager",

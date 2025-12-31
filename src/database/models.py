@@ -67,8 +67,8 @@ class Repository(Base):
         back_populates="repository",
         cascade="all, delete-orphan"
     )
-    analysis_results = relationship(
-        "AnalysisResult",
+    test_scripts = relationship(
+        "TestScript",
         back_populates="repository",
         cascade="all, delete-orphan"
     )
@@ -167,25 +167,31 @@ class CodeChunk(Base):
         }
 
 
-class AnalysisResult(Base):
+class TestScript(Base):
     """
-    AI 분석 결과
+    생성된 Playwright 테스트 스크립트
     
     Attributes:
         id: 기본 키
         repository_id: 연관된 저장소 ID (외래 키)
-        requirement: 사용자 요구사항
-        is_executable: 실행 가능 여부
-        reasoning: 판단 근거
-        confidence_score: 신뢰도 점수 (0-100)
+        requirement: 테스트 요구사항
+        test_type: 테스트 타입 (e2e, unit, integration)
+        base_url: 테스트 대상 URL
+        test_code: 생성된 Playwright 코드
+        filename: 파일명 (예: login_20250109.spec.js)
+        test_description: 테스트 설명
+        test_cases: 테스트 케이스 목록 (JSON)
+        lines_of_code: 코드 라인 수
+        storage_url: S3/MinIO 저장 URL
+        download_url: 다운로드 URL (Pre-signed)
         ai_model: 사용된 AI 모델 (gpt, claude)
-        code_context: 분석에 사용된 코드 컨텍스트
+        code_context: 생성에 사용된 코드 컨텍스트
         metadata: 추가 메타데이터 (JSON)
         created_at: 레코드 생성 시각
         repository: 연관된 저장소 객체
     """
     
-    __tablename__ = "analysis_results"
+    __tablename__ = "test_scripts"
     
     # 기본 키
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -198,18 +204,28 @@ class AnalysisResult(Base):
         index=True
     )
     
-    # 요구사항
+    # 테스트 요구사항
     requirement = Column(Text, nullable=False)
+    test_type = Column(String(50), default="e2e")  # e2e, unit, integration
+    base_url = Column(String(500))  # 테스트 대상 URL
     
-    # 분석 결과
-    is_executable = Column(Boolean, nullable=False)
-    reasoning = Column(Text, nullable=False)
-    confidence_score = Column(Integer, nullable=False)  # 0-100
+    # 생성된 코드
+    test_code = Column(Text, nullable=False)
+    filename = Column(String(200))  # login_20250109.spec.js
+    
+    # 테스트 메타데이터
+    test_description = Column(Text)
+    test_cases = Column(JSON, default=[])  # ["정상 로그인", "실패 케이스"]
+    lines_of_code = Column(Integer)
+    
+    # 저장 위치
+    storage_url = Column(String(500))  # s3://bucket/path
+    download_url = Column(String(1000))  # Pre-signed URL
     
     # AI 모델 정보
     ai_model = Column(String(50))  # "gpt", "claude"
     
-    # 분석 컨텍스트
+    # 생성 컨텍스트
     code_context = Column(Text)  # RAG에서 검색된 코드
     
     # 추가 정보 (JSON)
@@ -219,14 +235,14 @@ class AnalysisResult(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     
     # 관계 (N:1)
-    repository = relationship("Repository", back_populates="analysis_results")
+    repository = relationship("Repository", back_populates="test_scripts")
     
     def __repr__(self):
         return (
-            f"<AnalysisResult(id={self.id}, "
+            f"<TestScript(id={self.id}, "
             f"repo_id={self.repository_id}, "
-            f"executable={self.is_executable}, "
-            f"confidence={self.confidence_score})>"
+            f"filename='{self.filename}', "
+            f"type='{self.test_type}')>"
         )
     
     def to_dict(self):
@@ -235,11 +251,16 @@ class AnalysisResult(Base):
             "id": self.id,
             "repository_id": self.repository_id,
             "requirement": self.requirement,
-            "is_executable": self.is_executable,
-            "reasoning": self.reasoning,
-            "confidence_score": self.confidence_score,
+            "test_type": self.test_type,
+            "base_url": self.base_url,
+            "filename": self.filename,
+            "test_description": self.test_description,
+            "test_cases": self.test_cases,
+            "lines_of_code": self.lines_of_code,
+            "storage_url": self.storage_url,
+            "download_url": self.download_url,
             "ai_model": self.ai_model,
-            "code_context": self.code_context[:200] + "..." if self.code_context else None,
+            "code_preview": self.test_code[:200] + "..." if self.test_code else None,
             "metadata": self.metadata,
             "created_at": self.created_at.isoformat() if self.created_at else None
         }

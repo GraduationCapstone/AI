@@ -17,12 +17,12 @@ from .signature import (
 logger = logging.getLogger(__name__)
 
 
-class ExecutabilityAnalyzer(dspy.Module):
+class PlaywrightTestGenerator(dspy.Module):
     """
-    코드 실행 가능성 분석 모듈
+    Playwright 테스트 코드 생성 모듈
     
     요구사항과 코드 컨텍스트를 입력받아,
-    코드가 요구사항을 만족하는지 판단합니다.
+    실행 가능한 Playwright 테스트 코드를 생성합니다.
     
     Attributes:
         chain_of_thought: ChainOfThought 모듈 (단계적 사고)
@@ -30,113 +30,123 @@ class ExecutabilityAnalyzer(dspy.Module):
     Example:
         >>> from config import settings
         >>> configure_dspy(settings.ollama_base_url, settings.ollama_model)
-        >>> analyzer = ExecutabilityAnalyzer()
-        >>> result = analyzer(
-        ...     requirement="로그인 기능 테스트",
-        ...     code_context="def login()..."
+        >>> generator = PlaywrightTestGenerator()
+        >>> result = generator.generate_to_dict(
+        ...     requirement="로그인 기능 E2E 테스트",
+        ...     code_context="def login()...",
+        ...     base_url="https://example.com"
         ... )
-        >>> print(result.is_executable)
+        >>> print(result["test_code"])  # Playwright 코드
     """
     
     def __init__(self):
-        """ExecutabilityAnalyzer 초기화"""
+        """PlaywrightTestGenerator 초기화"""
         super().__init__()
         
         # ChainOfThought 사용 (AI가 단계적으로 사고)
-        self.chain_of_thought = dspy.ChainOfThought(ExecutabilitySignature)
+        self.chain_of_thought = dspy.ChainOfThought(PlaywrightTestGenerationSignature)
         
-        logger.info("ExecutabilityAnalyzer initialized with ChainOfThought")
+        logger.info("PlaywrightTestGenerator initialized with ChainOfThought")
     
     def forward(
         self,
         requirement: str,
-        code_context: str
+        code_context: str,
+        base_url: str
     ) -> dspy.Prediction:
         """
-        코드 실행 가능성 분석
+        Playwright 테스트 코드 생성
         
         Args:
-            requirement: 사용자 요구사항
+            requirement: 테스트 요구사항
             code_context: RAG에서 검색된 코드 컨텍스트
+            base_url: 테스트 대상 URL
         
         Returns:
-            dspy.Prediction: 분석 결과
-                - is_executable: str ("true" or "false")
-                - reasoning: str (판단 근거)
-                - confidence_score: str (0-100)
+            dspy.Prediction: 생성 결과
+                - test_code: str (완전한 Playwright 코드)
+                - test_description: str (테스트 설명)
+                - test_cases: str (JSON 배열)
         
         Example:
-            >>> analyzer = ExecutabilityAnalyzer()
-            >>> result = analyzer(
-            ...     requirement="사용자 인증",
-            ...     code_context="def authenticate()..."
+            >>> generator = PlaywrightTestGenerator()
+            >>> result = generator(
+            ...     requirement="로그인 테스트",
+            ...     code_context="def login()...",
+            ...     base_url="https://example.com"
             ... )
-            >>> print(result.is_executable)  # "true"
+            >>> print(result.test_code)
         """
         try:
-            logger.debug(f"Analyzing requirement: '{requirement[:50]}...'")
+            logger.debug(f"Generating test for: '{requirement[:50]}...'")
             
-            # ChainOfThought로 분석
+            # ChainOfThought로 테스트 코드 생성
             prediction = self.chain_of_thought(
                 requirement=requirement,
-                code_context=code_context
+                code_context=code_context,
+                base_url=base_url
             )
             
             logger.info(
-                f"Analysis complete: is_executable={prediction.is_executable}, "
-                f"confidence={prediction.confidence_score}"
+                f"Test generation complete: {len(prediction.test_code)} chars"
             )
             
             return prediction
         
         except Exception as e:
-            logger.error(f"Analysis failed: {e}")
+            logger.error(f"Test generation failed: {e}")
             raise
     
-    def analyze_to_dict(
+    def generate_to_dict(
         self,
         requirement: str,
-        code_context: str
+        code_context: str,
+        base_url: str
     ) -> Dict[str, Any]:
         """
-        분석 결과를 딕셔너리로 반환 (API 응답용)
+        테스트 코드를 딕셔너리로 반환 (API 응답용)
         
         Args:
-            requirement: 사용자 요구사항
+            requirement: 테스트 요구사항
             code_context: 코드 컨텍스트
+            base_url: 테스트 대상 URL
         
         Returns:
             Dict: JSON 직렬화 가능한 딕셔너리
-                - is_executable: bool
-                - reasoning: str
-                - confidence_score: int
+                - test_code: str (Playwright 코드)
+                - test_description: str
+                - test_cases: List[str]
+                - lines_of_code: int
         
         Example:
-            >>> result_dict = analyzer.analyze_to_dict("...", "...")
-            >>> print(result_dict)
-            {
-                "is_executable": True,
-                "reasoning": "...",
-                "confidence_score": 85
-            }
+            >>> result = generator.generate_to_dict(
+            ...     requirement="로그인 테스트",
+            ...     code_context="...",
+            ...     base_url="https://example.com"
+            ... )
+            >>> print(result["test_cases"])  # ["정상 로그인", "실패 케이스"]
         """
-        prediction = self.forward(requirement, code_context)
+        prediction = self.forward(requirement, code_context, base_url)
         
-        # 문자열 → 타입 변환
-        is_executable = prediction.is_executable.lower() == "true"
-        
+        # test_cases JSON 파싱
+        import json
         try:
-            confidence_score = int(prediction.confidence_score)
-        except (ValueError, AttributeError):
-            logger.warning(
-                f"Failed to parse confidence_score: {prediction.confidence_score}"
-            )
-            confidence_score = 50  # 기본값
+            test_cases = json.loads(prediction.test_cases)
+            if not isinstance(test_cases, list):
+                test_cases = [prediction.test_cases]
+        except (json.JSONDecodeError, AttributeError):
+            # JSON 파싱 실패 시 텍스트 분할
+            logger.warning(f"Failed to parse test_cases as JSON: {prediction.test_cases}")
+            test_cases = [case.strip() for case in prediction.test_cases.split(',')]
+        
+        # 코드 라인 수 계산
+        lines_of_code = len(prediction.test_code.split('\n'))
         
         return {
-            "is_executable": is_executable,
-            "reasoning": prediction.reasoning,
-            "confidence_score": confidence_score
+            "test_code": prediction.test_code,
+            "test_description": prediction.test_description,
+            "test_cases": test_cases,
+            "lines_of_code": lines_of_code
         }
 
 

@@ -42,13 +42,13 @@ DSPy 모듈
 """
 
 from .signature import (
-    ExecutabilitySignature,
+    PlaywrightTestGenerationSignature,
     CodeAnalysisSignature,
     TestGenerationSignature,
 )
 
 from .dspy_modules import (
-    ExecutabilityAnalyzer,
+    PlaywrightTestGenerator,
     CodeAnalyzer,
     TestGenerator,
     configure_dspy,
@@ -62,12 +62,12 @@ from .optimizer import (
 
 __all__ = [
     # Signatures
-    "ExecutabilitySignature",
+    "PlaywrightTestGenerationSignature",
     "CodeAnalysisSignature",
     "TestGenerationSignature",
     
     # Modules
-    "ExecutabilityAnalyzer",
+    "PlaywrightTestGenerator",
     "CodeAnalyzer",
     "TestGenerator",
     

@@ -11,7 +11,7 @@ from sqlalchemy.pool import QueuePool
 from contextlib import contextmanager
 import logging
 
-from .models import Base, Repository, CodeChunk, AnalysisResult
+from .models import Base, Repository, CodeChunk, TestScript
 
 logger = logging.getLogger(__name__)
 
@@ -328,90 +328,142 @@ class DatabaseManager:
             
             return output
     
-    # ===== AnalysisResult CRUD =====
+    # ===== TestScript CRUD =====
     
-    def create_analysis_result(
+    def create_test_script(
         self,
         repository_id: int,
         requirement: str,
-        is_executable: bool,
-        reasoning: str,
-        confidence_score: int,
+        test_code: str,
+        filename: str,
+        test_type: str = "e2e",
+        base_url: Optional[str] = None,
+        test_description: Optional[str] = None,
+        test_cases: Optional[List[str]] = None,
+        lines_of_code: Optional[int] = None,
+        storage_url: Optional[str] = None,
+        download_url: Optional[str] = None,
         ai_model: str = "gpt",
         code_context: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None
-    ) -> AnalysisResult:
+    ) -> TestScript:
         """
-        분석 결과 생성
+        테스트 스크립트 생성
         
         Args:
             repository_id: 저장소 ID
-            requirement: 요구사항
-            is_executable: 실행 가능 여부
-            reasoning: 판단 근거
-            confidence_score: 신뢰도 (0-100)
+            requirement: 테스트 요구사항
+            test_code: 생성된 Playwright 코드
+            filename: 파일명
+            test_type: 테스트 타입 (e2e, unit, integration)
+            base_url: 테스트 대상 URL
+            test_description: 테스트 설명
+            test_cases: 테스트 케이스 목록
+            lines_of_code: 코드 라인 수
+            storage_url: S3/MinIO URL
+            download_url: 다운로드 URL
             ai_model: AI 모델 이름
             code_context: 코드 컨텍스트
             metadata: 추가 메타데이터
         
         Returns:
-            AnalysisResult: 생성된 분석 결과
+            TestScript: 생성된 테스트 스크립트
         """
         with self.get_session() as session:
-            result = AnalysisResult(
+            script = TestScript(
                 repository_id=repository_id,
                 requirement=requirement,
-                is_executable=is_executable,
-                reasoning=reasoning,
-                confidence_score=confidence_score,
+                test_code=test_code,
+                filename=filename,
+                test_type=test_type,
+                base_url=base_url,
+                test_description=test_description,
+                test_cases=test_cases or [],
+                lines_of_code=lines_of_code,
+                storage_url=storage_url,
+                download_url=download_url,
                 ai_model=ai_model,
                 code_context=code_context,
                 metadata=metadata or {}
             )
-            session.add(result)
+            session.add(script)
             session.flush()
-            session.refresh(result)
+            session.refresh(script)
             
             logger.info(
-                f"AnalysisResult created: repo_id={repository_id}, "
-                f"executable={is_executable}, confidence={confidence_score}"
+                f"TestScript created: repo_id={repository_id}, "
+                f"filename={filename}"
             )
-            return result
+            return script
     
-    def get_analysis_results_by_repository(
+    def get_test_scripts_by_repository(
         self,
         repository_id: int,
+        test_type: Optional[str] = None,
         limit: int = 100
-    ) -> List[AnalysisResult]:
-        """저장소의 모든 분석 결과 조회"""
+    ) -> List[TestScript]:
+        """
+        저장소의 테스트 스크립트 조회
+        
+        Args:
+            repository_id: 저장소 ID
+            test_type: 테스트 타입 필터 (선택)
+            limit: 최대 개수
+        
+        Returns:
+            List[TestScript]: 테스트 스크립트 목록
+        """
         with self.get_session() as session:
-            results = (
-                session.query(AnalysisResult)
-                .filter_by(repository_id=repository_id)
-                .order_by(AnalysisResult.created_at.desc())
+            query = session.query(TestScript).filter_by(repository_id=repository_id)
+            
+            if test_type:
+                query = query.filter_by(test_type=test_type)
+            
+            scripts = (
+                query
+                .order_by(TestScript.created_at.desc())
                 .limit(limit)
                 .all()
             )
-            for result in results:
-                session.expunge(result)
-            return results
+            
+            for script in scripts:
+                session.expunge(script)
+            return scripts
     
-    def get_latest_analysis(
+    def get_test_script_by_id(self, script_id: int) -> Optional[TestScript]:
+        """ID로 테스트 스크립트 조회"""
+        with self.get_session() as session:
+            script = session.query(TestScript).filter_by(id=script_id).first()
+            if script:
+                session.expunge(script)
+            return script
+    
+    def get_latest_test_script(
         self,
         repository_id: int,
         requirement: str
-    ) -> Optional[AnalysisResult]:
-        """특정 요구사항에 대한 최신 분석 결과 조회"""
+    ) -> Optional[TestScript]:
+        """특정 요구사항에 대한 최신 테스트 스크립트 조회"""
         with self.get_session() as session:
-            result = (
-                session.query(AnalysisResult)
+            script = (
+                session.query(TestScript)
                 .filter_by(repository_id=repository_id, requirement=requirement)
-                .order_by(AnalysisResult.created_at.desc())
+                .order_by(TestScript.created_at.desc())
                 .first()
             )
-            if result:
-                session.expunge(result)
-            return result
+            if script:
+                session.expunge(script)
+            return script
+    
+    def delete_test_script(self, script_id: int) -> bool:
+        """테스트 스크립트 삭제"""
+        with self.get_session() as session:
+            script = session.query(TestScript).filter_by(id=script_id).first()
+            if script:
+                session.delete(script)
+                logger.info(f"TestScript deleted: id={script_id}")
+                return True
+            return False
     
     # ===== 유틸리티 =====
     
@@ -421,7 +473,7 @@ class DatabaseManager:
             return {
                 "repositories": session.query(Repository).count(),
                 "code_chunks": session.query(CodeChunk).count(),
-                "analysis_results": session.query(AnalysisResult).count()
+                "test_scripts": session.query(TestScript).count()
             }
     
     def close(self) -> None:

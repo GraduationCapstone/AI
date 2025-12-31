@@ -1,8 +1,9 @@
 """
-PROBE - Code Executability Analyzer
+Storage 모듈
 
-GitHub 저장소의 코드를 분석하여 주어진 요구사항이 실행 가능한지 판단하는 AI 시스템
+이 모듈은 생성된 Playwright 테스트 스크립트를 S3/MinIO에 저장합니다.
 """
 
-__version__ = "1.0.0"
-__author__ = "Donghan Song"
+from .file_manager import FileManager
+
+__all__ = ["FileManager"]
