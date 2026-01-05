@@ -4,7 +4,7 @@
 SQLAlchemy ORM을 사용한 테이블 모델 정의
 - Repository: GitHub 저장소 정보
 - CodeChunk: 코드 조각 + 벡터 임베딩
-- AnalysisResult: AI 분석 결과
+- TestScript: 생성된 Playwright 테스트 스크립트
 """
 
 from sqlalchemy import (
@@ -41,7 +41,7 @@ class Repository(Base):
         created_at: 레코드 생성 시각
         updated_at: 레코드 수정 시각
         code_chunks: 연관된 코드 청크들
-        analysis_results: 연관된 분석 결과들
+        test_scripts: 연관된 테스트 스크립트들
     """
     
     __tablename__ = "repositories"
@@ -280,9 +280,9 @@ if __name__ == "__main__":
     print("\n2. CodeChunk Table:")
     print(f"   Columns: {[c.name for c in CodeChunk.__table__.columns]}")
     
-    print("\n3. AnalysisResult Table:")
-    print(f"   Columns: {[c.name for c in AnalysisResult.__table__.columns]}")
+    print("\n3. TestScript Table:")
+    print(f"   Columns: {[c.name for c in TestScript.__table__.columns]}")
     
     print("\n=== Relationships ===")
     print("Repository → CodeChunk: 1:N")
-    print("Repository → AnalysisResult: 1:N")
+    print("Repository → TestScript: 1:N")

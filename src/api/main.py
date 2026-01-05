@@ -138,10 +138,9 @@ async def startup_event():
         
         # 2. RAG Pipeline 초기화
         logger.info("Initializing RAG Pipeline...")
-        embedding_generator = get_embedding_generator()
         rag_pipeline = RAGPipeline(
-            db_manager=db_manager,
-            embedding_generator=embedding_generator
+            collection_name="code_embeddings",
+            embedding_model=settings.embedding_model
         )
         logger.info("✅ RAG Pipeline initialized")
         
@@ -319,7 +318,6 @@ async def generate_playwright_test(request: TestGenerationRequest):
         logger.info("Searching for relevant code...")
         context = rag_pipeline.retrieve_context(
             requirement=request.requirement,
-            repository_id=repo.id,
             top_k=5,
             max_chars=4000
         )

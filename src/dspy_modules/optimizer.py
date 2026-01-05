@@ -1,16 +1,18 @@
 """
 DSPy 프롬프트 최적화
+
 참고:
 - 실제 최적화를 수행하려면 학습 데이터(라벨링된 예시)가 필요합니다
 - 현재는 구조만 제공하며, 추후 데이터가 축적되면 활성화할 수 있습니다
+- 이 파일은 선택적 고급 기능으로, 기본 시스템 동작에는 필요하지 않습니다
 """
 
 import dspy
 from typing import List, Dict, Any, Tuple
 import logging
 
-from .signature import ExecutabilitySignature
-from .dspy_modules import ExecutabilityAnalyzer
+from .signatures import PlaywrightTestGenerationSignature
+from .dspy_modules import PlaywrightTestGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -36,9 +38,9 @@ class OptimizerConfig:
         self.max_bootstrapped_demos = max_bootstrapped_demos
 
 
-class ExecutabilityOptimizer:
+class PlaywrightTestOptimizer:
     """
-    ExecutabilityAnalyzer 최적화기
+    PlaywrightTestGenerator 최적화기
     
     학습 데이터를 기반으로 프롬프트를 자동 최적화합니다.
     
@@ -51,20 +53,26 @@ class ExecutabilityOptimizer:
         >>> # 1. 학습 데이터 준비
         >>> train_data = [
         ...     {
-        ...         "requirement": "로그인 기능",
+        ...         "requirement": "로그인 기능 E2E 테스트",
         ...         "code_context": "def login()...",
-        ...         "is_executable": True,
-        ...         "reasoning": "login() 함수가 구현됨"
+        ...         "base_url": "https://example.com",
+        ...         "test_code": "import { test, expect }...",
+        ...         "test_description": "로그인 테스트",
+        ...         "test_cases": ["정상 로그인", "실패 케이스"]
         ...     },
         ...     ...
         ... ]
         >>> 
         >>> # 2. 최적화 수행
-        >>> optimizer = ExecutabilityOptimizer()
+        >>> optimizer = PlaywrightTestOptimizer()
         >>> optimized_model = optimizer.optimize(train_data, val_data)
         >>> 
         >>> # 3. 최적화된 모델 사용
-        >>> result = optimized_model(requirement="...", code_context="...")
+        >>> result = optimized_model(
+        ...     requirement="로그인 테스트",
+        ...     code_context="...",
+        ...     base_url="https://example.com"
+        ... )
     """
     
     def __init__(self, config: OptimizerConfig = None):
@@ -75,7 +83,7 @@ class ExecutabilityOptimizer:
             config: 최적화 설정 (기본값 사용 가능)
         """
         self.config = config or OptimizerConfig()
-        logger.info(f"ExecutabilityOptimizer initialized: {self.config.__dict__}")
+        logger.info(f"PlaywrightTestOptimizer initialized: {self.config.__dict__}")
     
     def prepare_dataset(
         self,
@@ -90,9 +98,10 @@ class ExecutabilityOptimizer:
                     {
                         "requirement": str,
                         "code_context": str,
-                        "is_executable": bool,
-                        "reasoning": str,
-                        "confidence_score": int
+                        "base_url": str,
+                        "test_code": str,
+                        "test_description": str,
+                        "test_cases": str (JSON 배열)
                     },
                     ...
                 ]
@@ -103,31 +112,28 @@ class ExecutabilityOptimizer:
         examples = []
         
         for item in raw_data:
-            # bool → str 변환
-            is_executable = "true" if item["is_executable"] else "false"
-            confidence_score = str(item.get("confidence_score", 50))
-            
             example = dspy.Example(
                 requirement=item["requirement"],
                 code_context=item["code_context"],
-                is_executable=is_executable,
-                reasoning=item.get("reasoning", ""),
-                confidence_score=confidence_score
-            ).with_inputs("requirement", "code_context")
+                base_url=item["base_url"],
+                test_code=item["test_code"],
+                test_description=item.get("test_description", ""),
+                test_cases=item.get("test_cases", "[]")
+            ).with_inputs("requirement", "code_context", "base_url")
             
             examples.append(example)
         
         logger.info(f"Prepared {len(examples)} examples for training")
         return examples
     
-    def accuracy_metric(
+    def quality_metric(
         self,
         example: dspy.Example,
         prediction: dspy.Prediction,
         trace=None
     ) -> float:
         """
-        정확도 평가 메트릭
+        테스트 코드 품질 평가 메트릭
         
         Args:
             example: 실제 정답
@@ -135,19 +141,27 @@ class ExecutabilityOptimizer:
             trace: 추적 정보 (디버깅용)
         
         Returns:
-            float: 정확도 점수 (0.0~1.0)
+            float: 품질 점수 (0.0~1.0)
         """
-        # is_executable 일치 여부
-        is_correct = (
-            example.is_executable.lower() == prediction.is_executable.lower()
-        )
+        score = 0.0
         
-        # 기본 점수
-        score = 1.0 if is_correct else 0.0
+        # 1. test_code가 생성되었는지 확인 (40점)
+        if hasattr(prediction, 'test_code') and len(prediction.test_code) > 100:
+            score += 0.4
         
-        # reasoning이 있으면 보너스 점수
-        if is_correct and len(prediction.reasoning) > 20:
-            score += 0.2  # 최대 1.2점
+        # 2. test_description이 있는지 확인 (20점)
+        if hasattr(prediction, 'test_description') and len(prediction.test_description) > 20:
+            score += 0.2
+        
+        # 3. test_cases가 있는지 확인 (20점)
+        if hasattr(prediction, 'test_cases') and len(prediction.test_cases) > 5:
+            score += 0.2
+        
+        # 4. Playwright 키워드 포함 여부 (20점)
+        if hasattr(prediction, 'test_code'):
+            playwright_keywords = ['test(', 'expect(', 'page.', '@playwright/test']
+            if any(kw in prediction.test_code for kw in playwright_keywords):
+                score += 0.2
         
         return min(score, 1.0)
     
@@ -156,7 +170,7 @@ class ExecutabilityOptimizer:
         train_data: List[Dict[str, Any]],
         val_data: List[Dict[str, Any]] = None,
         optimizer_type: str = "BootstrapFewShot"
-    ) -> ExecutabilityAnalyzer:
+    ) -> PlaywrightTestGenerator:
         """
         프롬프트 최적화 수행
         
@@ -168,7 +182,7 @@ class ExecutabilityOptimizer:
                 - "MIPRO": Multi-stage Instruction Optimization
         
         Returns:
-            ExecutabilityAnalyzer: 최적화된 모델
+            PlaywrightTestGenerator: 최적화된 모델
         
         Raises:
             ValueError: 학습 데이터가 부족한 경우
@@ -201,13 +215,13 @@ class ExecutabilityOptimizer:
         # 2. 최적화기 선택
         if optimizer_type == "BootstrapFewShot":
             optimizer = dspy.BootstrapFewShot(
-                metric=self.accuracy_metric,
+                metric=self.quality_metric,
                 max_bootstrapped_demos=self.config.max_bootstrapped_demos,
                 max_labeled_demos=self.config.max_bootstrapped_demos
             )
         elif optimizer_type == "MIPRO":
             optimizer = dspy.MIPRO(
-                metric=self.accuracy_metric,
+                metric=self.quality_metric,
                 num_trials=self.config.num_trials,
                 prompt_model=dspy.settings.lm
             )
@@ -217,7 +231,7 @@ class ExecutabilityOptimizer:
         # 3. 최적화 수행
         logger.info(f"Compiling with {optimizer_type}...")
         
-        base_model = ExecutabilityAnalyzer()
+        base_model = PlaywrightTestGenerator()
         optimized_model = optimizer.compile(
             base_model,
             trainset=train_examples,
@@ -230,14 +244,14 @@ class ExecutabilityOptimizer:
         
         logger.info(
             f"Optimization complete! "
-            f"Validation accuracy: {evaluation_score:.2%}"
+            f"Validation quality score: {evaluation_score:.2%}"
         )
         
         return optimized_model
     
     def _evaluate(
         self,
-        model: ExecutabilityAnalyzer,
+        model: PlaywrightTestGenerator,
         examples: List[dspy.Example]
     ) -> float:
         """
@@ -248,24 +262,25 @@ class ExecutabilityOptimizer:
             examples: 평가 데이터
         
         Returns:
-            float: 평균 정확도
+            float: 평균 품질 점수
         """
         total_score = 0.0
         
         for example in examples:
             prediction = model(
                 requirement=example.requirement,
-                code_context=example.code_context
+                code_context=example.code_context,
+                base_url=example.base_url
             )
-            score = self.accuracy_metric(example, prediction)
+            score = self.quality_metric(example, prediction)
             total_score += score
         
         return total_score / len(examples)
     
     def save_optimized_model(
         self,
-        model: ExecutabilityAnalyzer,
-        filepath: str = "optimized_analyzer.json"
+        model: PlaywrightTestGenerator,
+        filepath: str = "optimized_playwright_generator.json"
     ) -> None:
         """
         최적화된 모델 저장
@@ -283,8 +298,8 @@ class ExecutabilityOptimizer:
     
     def load_optimized_model(
         self,
-        filepath: str = "optimized_analyzer.json"
-    ) -> ExecutabilityAnalyzer:
+        filepath: str = "optimized_playwright_generator.json"
+    ) -> PlaywrightTestGenerator:
         """
         저장된 모델 로드
         
@@ -292,10 +307,10 @@ class ExecutabilityOptimizer:
             filepath: 모델 파일 경로
         
         Returns:
-            ExecutabilityAnalyzer: 로드된 모델
+            PlaywrightTestGenerator: 로드된 모델
         """
         try:
-            model = ExecutabilityAnalyzer()
+            model = PlaywrightTestGenerator()
             model.load(filepath)
             logger.info(f"Optimized model loaded from {filepath}")
             return model
@@ -317,6 +332,7 @@ if __name__ == "__main__":
     
     print("\n=== DSPy Optimizer Demo ===")
     print("참고: 실제 최적화를 수행하려면 라벨링된 학습 데이터가 필요합니다.")
+    print("이 파일은 선택적 고급 기능입니다.\n")
     
     # DSPy 설정
     configure_dspy(
@@ -327,31 +343,34 @@ if __name__ == "__main__":
     # 샘플 학습 데이터 (실제로는 최소 20개 이상 필요)
     sample_train_data = [
         {
-            "requirement": "사용자 로그인 기능",
+            "requirement": "사용자 로그인 기능 E2E 테스트",
             "code_context": "def login(username, password): return True",
-            "is_executable": True,
-            "reasoning": "login() 함수가 구현되어 있음",
-            "confidence_score": 90
+            "base_url": "https://example.com",
+            "test_code": "import { test, expect } from '@playwright/test';\n\ntest('login test', async ({ page }) => {\n  await page.goto('https://example.com/login');\n});",
+            "test_description": "사용자 로그인 기능에 대한 E2E 테스트",
+            "test_cases": '["정상 로그인", "잘못된 비밀번호"]'
         },
         {
-            "requirement": "데이터베이스 연결",
-            "code_context": "def connect(): pass",
-            "is_executable": False,
-            "reasoning": "connect() 함수가 비어있음",
-            "confidence_score": 30
+            "requirement": "상품 검색 기능",
+            "code_context": "def search(query): return results",
+            "base_url": "https://shop.example.com",
+            "test_code": "import { test, expect } from '@playwright/test';\n\ntest('search test', async ({ page }) => {\n  await page.goto('https://shop.example.com');\n});",
+            "test_description": "상품 검색 기능 테스트",
+            "test_cases": '["검색 성공", "검색 실패"]'
         },
-        # ... 더 많은 데이터 필요
+        # ... 더 많은 데이터 필요 (최소 10개)
     ]
     
     print(f"\n학습 데이터 개수: {len(sample_train_data)}")
     print("실제 최적화를 위해서는 최소 10개 이상의 데이터가 필요합니다.")
     
     # Optimizer 초기화
-    optimizer = ExecutabilityOptimizer()
+    optimizer = PlaywrightTestOptimizer()
     
     # 데이터 준비 테스트
     examples = optimizer.prepare_dataset(sample_train_data)
     print(f"\n준비된 Example 개수: {len(examples)}")
-    print(f"첫 번째 Example: {examples[0]}")
+    print(f"첫 번째 Example inputs: requirement, code_context, base_url")
     
     print("\n참고: 충분한 데이터가 있다면 optimizer.optimize()를 호출하세요.")
+    print("예: optimized_model = optimizer.optimize(train_data, val_data)")

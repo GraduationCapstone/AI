@@ -47,6 +47,13 @@ class Settings(BaseSettings):
     postgres_user: str = os.getenv("POSTGRES_USER", "probe_user")
     postgres_password: str = os.getenv("POSTGRES_PASSWORD", "")
     
+    # ===== S3/MinIO Storage =====
+    s3_endpoint_url: str = os.getenv("S3_ENDPOINT_URL", "http://localhost:9000")
+    aws_access_key_id: str = os.getenv("AWS_ACCESS_KEY_ID", "")
+    aws_secret_access_key: str = os.getenv("AWS_SECRET_ACCESS_KEY", "")
+    s3_bucket_name: str = os.getenv("S3_BUCKET_NAME", "probe-tests")
+    aws_region: str = os.getenv("AWS_REGION", "us-east-1")
+    
     # ===== FastAPI =====
     fastapi_host: str = os.getenv("FASTAPI_HOST", "0.0.0.0")
     fastapi_port: int = int(os.getenv("FASTAPI_PORT", "8000"))
@@ -137,6 +144,12 @@ def validate_settings() -> bool:
         if not settings.ollama_model:
             errors.append("OLLAMA_MODEL is not set")
     
+    # S3/MinIO 검증
+    if not settings.aws_access_key_id:
+        errors.append("AWS_ACCESS_KEY_ID is not set (required for S3/MinIO)")
+    if not settings.aws_secret_access_key:
+        errors.append("AWS_SECRET_ACCESS_KEY is not set (required for S3/MinIO)")
+    
     if errors:
         error_message = "Configuration errors:\n" + "\n".join(f"  - {e}" for e in errors)
         logger.error(error_message)
@@ -197,6 +210,13 @@ def print_settings(mask_secrets: bool = True) -> None:
     print(f"Database: {settings.postgres_db}")
     print(f"User: {settings.postgres_user}")
     print(f"Password: {mask(settings.postgres_password) if mask_secrets else settings.postgres_password}")
+    
+    print(f"\n[S3/MinIO Storage]")
+    print(f"Endpoint: {settings.s3_endpoint_url}")
+    print(f"Bucket: {settings.s3_bucket_name}")
+    print(f"Access Key: {mask(settings.aws_access_key_id) if mask_secrets else settings.aws_access_key_id}")
+    print(f"Secret Key: {mask(settings.aws_secret_access_key) if mask_secrets else settings.aws_secret_access_key}")
+    print(f"Region: {settings.aws_region}")
     
     print(f"\n[FastAPI]")
     print(f"Host: {settings.fastapi_host}:{settings.fastapi_port}")

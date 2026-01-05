@@ -127,24 +127,25 @@ if __name__ == "__main__":
     )
     dspy.settings.configure(lm=ollama_lm)
     
-    # ExecutabilitySignature 사용
-    print("\n=== Test 1: ExecutabilitySignature ===")
-    analyzer = dspy.ChainOfThought(ExecutabilitySignature)
+    # PlaywrightTestGenerationSignature 사용
+    print("\n=== Test 1: PlaywrightTestGenerationSignature ===")
+    generator = dspy.ChainOfThought(PlaywrightTestGenerationSignature)
     
-    result = analyzer(
-        requirement="사용자 로그인 기능 구현",
+    result = generator(
+        requirement="사용자 로그인 기능 E2E 테스트",
         code_context="""
 def login(username, password):
     '''사용자 로그인 함수'''
     if username == "admin" and password == "1234":
         return True
     return False
-"""
+""",
+        base_url="https://example.com"
     )
     
-    print(f"Is Executable: {result.is_executable}")
-    print(f"Reasoning: {result.reasoning}")
-    print(f"Confidence: {result.confidence_score}")
+    print(f"Test Code (preview): {result.test_code[:200]}...")
+    print(f"Test Description: {result.test_description}")
+    print(f"Test Cases: {result.test_cases}")
     
     # CodeAnalysisSignature 사용
     print("\n=== Test 2: CodeAnalysisSignature ===")

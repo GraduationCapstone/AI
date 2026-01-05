@@ -165,4 +165,4 @@ models/
 
 # PostgreSQL dumps
 *.sql
-*.dump.env
+*.dump
