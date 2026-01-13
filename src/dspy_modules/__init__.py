@@ -56,7 +56,7 @@ from .dspy_modules import (
 )
 
 from .optimizer import (
-    ExecutabilityOptimizer,
+    PlaywrightTestOptimizer,
     OptimizerConfig,
 )
 
@@ -76,7 +76,7 @@ __all__ = [
     "get_current_lm_info",
     
     # Optimizer
-    "ExecutabilityOptimizer",
+    "PlaywrightTestOptimizer",
     "OptimizerConfig",
 ]
 
