@@ -41,7 +41,7 @@ DSPy 모듈
 - Optimizer는 학습 데이터가 있을 때 사용하는 고급 기능입니다.
 """
 
-from .signature import (
+from .signatures import (
     PlaywrightTestGenerationSignature,
     CodeAnalysisSignature,
     TestGenerationSignature,
