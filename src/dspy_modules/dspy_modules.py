@@ -8,7 +8,7 @@ import dspy
 from typing import Dict, Any, Optional
 import logging
 
-from .signature import (
+from .signatures import (
     ExecutabilitySignature,
     CodeAnalysisSignature,
     TestGenerationSignature
