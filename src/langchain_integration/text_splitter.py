@@ -2,8 +2,8 @@
 Code Chunking using LangChain Text Splitters
 """
 from typing import List
-from langchain.text_splitter import RecursiveCharacterTextSplitter, Language
-from langchain.schema import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter, Language
+from langchain_core.documents import Document
 import logging
 
 logger = logging.getLogger(__name__)

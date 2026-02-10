@@ -6,7 +6,6 @@ Signature는 AI 모델의 입력과 출력을 정의합니다.
 """
 
 import dspy
-from typing import Optional
 
 
 class PlaywrightTestGenerationSignature(dspy.Signature):
@@ -22,16 +21,6 @@ class PlaywrightTestGenerationSignature(dspy.Signature):
         - test_code: 완전한 Playwright 테스트 코드 (JavaScript)
         - test_description: 테스트 시나리오 설명
         - test_cases: 포함된 테스트 케이스 목록 (JSON 배열)
-    
-    Example:
-        >>> signature = PlaywrightTestGenerationSignature
-        >>> generator = dspy.ChainOfThought(signature)
-        >>> result = generator(
-        ...     requirement="로그인 기능 E2E 테스트",
-        ...     code_context="def login(username, password): ...",
-        ...     base_url="https://example.com"
-        ... )
-        >>> print(result.test_code)  # Playwright 코드
     """
     
     # ===== 입력 필드 =====
@@ -85,76 +74,3 @@ class PlaywrightTestGenerationSignature(dspy.Signature):
             "예: [\"정상 로그인\", \"잘못된 비밀번호\", \"빈 필드 검증\"]"
         )
     )
-
-
-class CodeAnalysisSignature(dspy.Signature):
-    """
-    일반적인 코드 분석 Signature (선택사항)
-    
-    더 세밀한 분석이 필요한 경우 사용할 수 있습니다.
-    """
-    
-    requirement: str = dspy.InputField(desc="분석 요구사항")
-    code_context: str = dspy.InputField(desc="코드 컨텍스트")
-    
-    analysis: str = dspy.OutputField(desc="코드 분석 결과")
-    suggestions: str = dspy.OutputField(desc="개선 제안사항")
-    complexity: str = dspy.OutputField(desc="코드 복잡도 (low/medium/high)")
-
-
-class TestGenerationSignature(dspy.Signature):
-    """
-    테스트 케이스 생성 Signature (미래 확장용)
-    
-    코드에 대한 테스트 케이스를 자동 생성할 때 사용합니다.
-    """
-    
-    code_context: str = dspy.InputField(desc="테스트할 코드")
-    language: str = dspy.InputField(desc="프로그래밍 언어 (python, javascript 등)")
-    
-    test_cases: str = dspy.OutputField(desc="생성된 테스트 케이스 코드")
-    coverage: str = dspy.OutputField(desc="예상 테스트 커버리지 (%)")
-
-
-# 사용 예시
-if __name__ == "__main__":
-    import dspy
-    
-    # Ollama 설정 (테스트용)
-    ollama_lm = dspy.OllamaLocal(
-        model="llama3.1:8b",
-        base_url="http://localhost:11434"
-    )
-    dspy.settings.configure(lm=ollama_lm)
-    
-    # PlaywrightTestGenerationSignature 사용
-    print("\n=== Test 1: PlaywrightTestGenerationSignature ===")
-    generator = dspy.ChainOfThought(PlaywrightTestGenerationSignature)
-    
-    result = generator(
-        requirement="사용자 로그인 기능 E2E 테스트",
-        code_context="""
-def login(username, password):
-    '''사용자 로그인 함수'''
-    if username == "admin" and password == "1234":
-        return True
-    return False
-""",
-        base_url="https://example.com"
-    )
-    
-    print(f"Test Code (preview): {result.test_code[:200]}...")
-    print(f"Test Description: {result.test_description}")
-    print(f"Test Cases: {result.test_cases}")
-    
-    # CodeAnalysisSignature 사용
-    print("\n=== Test 2: CodeAnalysisSignature ===")
-    code_analyzer = dspy.ChainOfThought(CodeAnalysisSignature)
-    
-    result2 = code_analyzer(
-        requirement="코드 품질 분석",
-        code_context="def add(a, b): return a + b"
-    )
-    
-    print(f"Analysis: {result2.analysis}")
-    print(f"Complexity: {result2.complexity}")

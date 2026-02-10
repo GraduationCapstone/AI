@@ -1,64 +1,87 @@
 """
-Claude API 클라이언트
+AWS Bedrock Claude API 클라이언트
 
-Anthropic Claude API와 통신합니다.
+AWS Bedrock을 통해 Claude 모델과 통신합니다.
 """
 
 from typing import List, Dict, Optional, Any
-from anthropic import Anthropic
+import boto3
+import json
 import logging
 
 logger = logging.getLogger(__name__)
 
 
-class ClaudeClient:
+class BedrockClient:
     """
-    Anthropic Claude API 클라이언트
+    AWS Bedrock Claude API 클라이언트
     
     Attributes:
-        client: Anthropic 클라이언트
-        model: Claude 모델 이름
+        client: Bedrock Runtime 클라이언트
+        model: Claude 모델 ID
+        region: AWS 리전
     """
     
     def __init__(
         self,
-        api_key: str,
-        model: str = "claude-3-5-sonnet-20241022",
+        model: str = "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        region: str = "us-east-1",
         timeout: int = 60
     ):
         """
-        ClaudeClient 초기화
+        BedrockClient 초기화
         
         Args:
-            api_key: Anthropic API 키
-            model: Claude 모델 이름
+            model: Claude 모델 ID (Bedrock 형식)
+            region: AWS 리전
             timeout: 요청 타임아웃 (초)
+        
+        Note:
+            AWS 인증은 IAM Role 또는 환경변수(AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)를 사용합니다.
         """
-        if not api_key:
-            raise ValueError("Anthropic API key is required")
-        
         self.model = model
-        self.client = Anthropic(
-            api_key=api_key,
-            timeout=timeout
-        )
+        self.region = region
         
-        logger.info(f"ClaudeClient initialized: model={model}")
-        
-        # 연결 테스트
-        self._test_connection()
+        try:
+            self.client = boto3.client(
+                service_name='bedrock-runtime',
+                region_name=region,
+                config=boto3.session.Config(
+                    connect_timeout=timeout,
+                    read_timeout=timeout
+                )
+            )
+            logger.info(f"BedrockClient initialized: model={model}, region={region}")
+            
+            # 연결 테스트
+            self._test_connection()
+            
+        except Exception as e:
+            error_msg = f"Failed to initialize Bedrock client: {e}"
+            logger.error(error_msg)
+            raise ConnectionError(error_msg) from e
     
     def _test_connection(self) -> None:
-        """Claude API 연결 테스트"""
+        """Bedrock API 연결 테스트"""
         try:
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=10,
-                messages=[{"role": "user", "content": "Hi"}]
+            # 간단한 테스트 요청
+            test_body = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 10,
+                "messages": [
+                    {"role": "user", "content": "Hi"}
+                ]
+            }
+            
+            response = self.client.invoke_model(
+                modelId=self.model,
+                body=json.dumps(test_body)
             )
-            logger.info("Claude API connection test successful")
+            
+            logger.info("Bedrock API connection test successful")
+            
         except Exception as e:
-            error_msg = f"Failed to connect to Claude API: {e}"
+            error_msg = f"Failed to connect to Bedrock API: {e}"
             logger.error(error_msg)
             raise ConnectionError(error_msg) from e
     
@@ -83,9 +106,9 @@ class ClaudeClient:
             str: 생성된 응답
         """
         try:
-            logger.debug(f"Claude chat request: {len(messages)} messages")
+            logger.debug(f"Bedrock chat request: {len(messages)} messages")
             
-            # Anthropic API 형식으로 변환
+            # Bedrock API 형식으로 변환
             api_messages = []
             for msg in messages:
                 if msg["role"] != "system":  # system은 별도 처리
@@ -94,23 +117,38 @@ class ClaudeClient:
                         "content": msg["content"]
                     })
             
+            # Request body 구성
+            body = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "messages": api_messages
+            }
+            
+            # System 프롬프트 추가
+            if system:
+                body["system"] = system
+            
+            # 추가 파라미터
+            if kwargs:
+                body.update(kwargs)
+            
             # API 호출
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                system=system,
-                messages=api_messages,
-                **kwargs
+            response = self.client.invoke_model(
+                modelId=self.model,
+                body=json.dumps(body)
             )
             
-            content = response.content[0].text
-            logger.debug(f"Claude response: {len(content)} characters")
+            # 응답 파싱
+            response_body = json.loads(response['body'].read())
+            content = response_body['content'][0]['text']
+            
+            logger.debug(f"Bedrock response: {len(content)} characters")
             
             return content
         
         except Exception as e:
-            logger.error(f"Claude chat failed: {e}")
+            logger.error(f"Bedrock chat failed: {e}")
             raise
     
     def generate(
@@ -147,7 +185,8 @@ class ClaudeClient:
         """모델 정보 반환"""
         return {
             "model": self.model,
-            "type": "Claude API (Anthropic)",
+            "type": "Claude via AWS Bedrock",
+            "region": self.region,
             "status": "connected"
         }
 
@@ -155,32 +194,32 @@ class ClaudeClient:
 # 사용 예시
 if __name__ == "__main__":
     import logging
-    import os
     
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    
-    if not api_key:
-        print("Error: ANTHROPIC_API_KEY not found in environment")
-        print("Set it with: export ANTHROPIC_API_KEY='your-key-here'")
-    else:
-        try:
-            client = ClaudeClient(api_key=api_key)
-            
-            print("\n=== Test 1: Simple Generation ===")
-            response = client.generate(
-                "What is Python?",
-                system_message="You are a helpful assistant."
-            )
-            print(f"Response: {response[:200]}...")
-            
-            print("\n=== Test 2: Model Info ===")
-            info = client.get_model_info()
-            print(f"Model Info: {info}")
-            
-        except ConnectionError as e:
-            print(f"Error: {e}")
+    try:
+        # IAM Role 또는 환경변수로 인증
+        client = BedrockClient(
+            region="us-east-1"  # 필요시 변경
+        )
+        
+        print("\n=== Test 1: Simple Generation ===")
+        response = client.generate(
+            "What is Python?",
+            system_message="You are a helpful assistant."
+        )
+        print(f"Response: {response[:200]}...")
+        
+        print("\n=== Test 2: Model Info ===")
+        info = client.get_model_info()
+        print(f"Model Info: {info}")
+        
+    except ConnectionError as e:
+        print(f"Error: {e}")
+        print("\nMake sure:")
+        print("1. AWS credentials are configured (IAM Role or environment variables)")
+        print("2. Bedrock is available in your region")
+        print("3. You have access to Claude models in Bedrock")

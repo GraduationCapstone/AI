@@ -1,239 +1,51 @@
 """
-DSPy 분석 모듈
+DSPy 설정 모듈
 
-Signature를 사용하여 실제 코드 분석을 수행하는 DSPy 모듈입니다.
+AWS Bedrock 기반 DSPy 설정 함수를 제공합니다.
 """
 
 import dspy
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 import logging
-
-from .signatures import (
-    ExecutabilitySignature,
-    CodeAnalysisSignature,
-    TestGenerationSignature
-)
 
 logger = logging.getLogger(__name__)
 
 
-class PlaywrightTestGenerator(dspy.Module):
-    """
-    Playwright 테스트 코드 생성 모듈
-    
-    요구사항과 코드 컨텍스트를 입력받아,
-    실행 가능한 Playwright 테스트 코드를 생성합니다.
-    
-    Attributes:
-        chain_of_thought: ChainOfThought 모듈 (단계적 사고)
-    
-    Example:
-        >>> from config import settings
-        >>> configure_dspy(settings.ollama_base_url, settings.ollama_model)
-        >>> generator = PlaywrightTestGenerator()
-        >>> result = generator.generate_to_dict(
-        ...     requirement="로그인 기능 E2E 테스트",
-        ...     code_context="def login()...",
-        ...     base_url="https://example.com"
-        ... )
-        >>> print(result["test_code"])  # Playwright 코드
-    """
-    
-    def __init__(self):
-        """PlaywrightTestGenerator 초기화"""
-        super().__init__()
-        
-        # ChainOfThought 사용 (AI가 단계적으로 사고)
-        self.chain_of_thought = dspy.ChainOfThought(PlaywrightTestGenerationSignature)
-        
-        logger.info("PlaywrightTestGenerator initialized with ChainOfThought")
-    
-    def forward(
-        self,
-        requirement: str,
-        code_context: str,
-        base_url: str
-    ) -> dspy.Prediction:
-        """
-        Playwright 테스트 코드 생성
-        
-        Args:
-            requirement: 테스트 요구사항
-            code_context: RAG에서 검색된 코드 컨텍스트
-            base_url: 테스트 대상 URL
-        
-        Returns:
-            dspy.Prediction: 생성 결과
-                - test_code: str (완전한 Playwright 코드)
-                - test_description: str (테스트 설명)
-                - test_cases: str (JSON 배열)
-        
-        Example:
-            >>> generator = PlaywrightTestGenerator()
-            >>> result = generator(
-            ...     requirement="로그인 테스트",
-            ...     code_context="def login()...",
-            ...     base_url="https://example.com"
-            ... )
-            >>> print(result.test_code)
-        """
-        try:
-            logger.debug(f"Generating test for: '{requirement[:50]}...'")
-            
-            # ChainOfThought로 테스트 코드 생성
-            prediction = self.chain_of_thought(
-                requirement=requirement,
-                code_context=code_context,
-                base_url=base_url
-            )
-            
-            logger.info(
-                f"Test generation complete: {len(prediction.test_code)} chars"
-            )
-            
-            return prediction
-        
-        except Exception as e:
-            logger.error(f"Test generation failed: {e}")
-            raise
-    
-    def generate_to_dict(
-        self,
-        requirement: str,
-        code_context: str,
-        base_url: str
-    ) -> Dict[str, Any]:
-        """
-        테스트 코드를 딕셔너리로 반환 (API 응답용)
-        
-        Args:
-            requirement: 테스트 요구사항
-            code_context: 코드 컨텍스트
-            base_url: 테스트 대상 URL
-        
-        Returns:
-            Dict: JSON 직렬화 가능한 딕셔너리
-                - test_code: str (Playwright 코드)
-                - test_description: str
-                - test_cases: List[str]
-                - lines_of_code: int
-        
-        Example:
-            >>> result = generator.generate_to_dict(
-            ...     requirement="로그인 테스트",
-            ...     code_context="...",
-            ...     base_url="https://example.com"
-            ... )
-            >>> print(result["test_cases"])  # ["정상 로그인", "실패 케이스"]
-        """
-        prediction = self.forward(requirement, code_context, base_url)
-        
-        # test_cases JSON 파싱
-        import json
-        try:
-            test_cases = json.loads(prediction.test_cases)
-            if not isinstance(test_cases, list):
-                test_cases = [prediction.test_cases]
-        except (json.JSONDecodeError, AttributeError):
-            # JSON 파싱 실패 시 텍스트 분할
-            logger.warning(f"Failed to parse test_cases as JSON: {prediction.test_cases}")
-            test_cases = [case.strip() for case in prediction.test_cases.split(',')]
-        
-        # 코드 라인 수 계산
-        lines_of_code = len(prediction.test_code.split('\n'))
-        
-        return {
-            "test_code": prediction.test_code,
-            "test_description": prediction.test_description,
-            "test_cases": test_cases,
-            "lines_of_code": lines_of_code
-        }
-
-
-class CodeAnalyzer(dspy.Module):
-    """
-    일반적인 코드 분석 모듈 (선택사항)
-    
-    코드 품질, 복잡도, 개선 제안 등을 분석합니다.
-    """
-    
-    def __init__(self):
-        super().__init__()
-        self.chain_of_thought = dspy.ChainOfThought(CodeAnalysisSignature)
-        logger.info("CodeAnalyzer initialized")
-    
-    def forward(
-        self,
-        requirement: str,
-        code_context: str
-    ) -> dspy.Prediction:
-        """코드 분석"""
-        return self.chain_of_thought(
-            requirement=requirement,
-            code_context=code_context
-        )
-
-
-class TestGenerator(dspy.Module):
-    """
-    테스트 케이스 생성 모듈 (미래 확장용)
-    
-    주어진 코드에 대한 단위 테스트를 자동 생성합니다.
-    """
-    
-    def __init__(self):
-        super().__init__()
-        self.chain_of_thought = dspy.ChainOfThought(TestGenerationSignature)
-        logger.info("TestGenerator initialized")
-    
-    def forward(
-        self,
-        code_context: str,
-        language: str = "python"
-    ) -> dspy.Prediction:
-        """테스트 케이스 생성"""
-        return self.chain_of_thought(
-            code_context=code_context,
-            language=language
-        )
-
-
-def configure_dspy(
-    base_url: str = "http://localhost:11434",
-    model: str = "llama3.1:8b",
-    timeout_s: int = 60
+def configure_bedrock_dspy(
+    model: str = "anthropic.claude-3-5-sonnet-20241022-v2:0",
+    region: str = "us-east-1",
+    **kwargs
 ) -> None:
     """
-    DSPy 설정 (Ollama 연동)
+    DSPy 설정 (AWS Bedrock 연동)
     
     애플리케이션 시작 시 한 번만 호출하면 됩니다.
     
     Args:
-        base_url: Ollama 서버 URL
-        model: 사용할 Llama 모델
-        timeout_s: 요청 타임아웃 (초)
+        model: Claude 모델 ID
+        region: AWS 리전
+        **kwargs: BedrockClient에 전달할 추가 인자
     
     Example:
-        >>> from config import settings
-        >>> configure_dspy(
-        ...     base_url=settings.ollama_base_url,
-        ...     model=settings.ollama_model
-        ... )
+        >>> from src.dspy_modules import configure_bedrock_dspy
+        >>> configure_bedrock_dspy(region="us-east-1")
     """
     try:
-        # Ollama LM 초기화
-        ollama_lm = dspy.OllamaLocal(
+        from .bedrock_lm import BedrockLM
+        
+        # Bedrock LM 초기화
+        bedrock_lm = BedrockLM(
             model=model,
-            base_url=base_url,
-            timeout_s=timeout_s
+            region=region,
+            **kwargs
         )
         
         # DSPy 설정
-        dspy.settings.configure(lm=ollama_lm)
+        dspy.settings.configure(lm=bedrock_lm)
         
         logger.info(
-            f"DSPy configured with Ollama: "
-            f"base_url={base_url}, model={model}"
+            f"DSPy configured with Bedrock: "
+            f"model={model}, region={region}"
         )
         
         # 연결 테스트
@@ -241,11 +53,11 @@ def configure_dspy(
         logger.info(f"DSPy LM configured: {test_lm}")
     
     except Exception as e:
-        logger.error(f"Failed to configure DSPy: {e}")
+        logger.error(f"Failed to configure DSPy with Bedrock: {e}")
         raise ConnectionError(
-            f"Cannot connect to Ollama at {base_url}. "
-            f"Please ensure Ollama is running (ollama serve) "
-            f"and the model '{model}' is installed (ollama pull {model})."
+            f"Cannot connect to Bedrock in {region}. "
+            f"Please ensure AWS credentials are configured and "
+            f"you have access to Claude models in Bedrock."
         ) from e
 
 
@@ -266,7 +78,7 @@ def get_current_lm_info() -> Dict[str, Any]:
     except AttributeError:
         return {
             "configured": False,
-            "error": "DSPy LM not configured. Call configure_dspy() first."
+            "error": "DSPy LM not configured. Call configure_bedrock_dspy() first."
         }
 
 
@@ -274,56 +86,20 @@ def get_current_lm_info() -> Dict[str, Any]:
 if __name__ == "__main__":
     import logging
     
-    # 로깅 설정
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     
-    print("\n=== Test 1: Configure DSPy ===")
-    configure_dspy(
-        base_url="http://localhost:11434",
-        model="llama3.1:8b"
-    )
-    
-    print("\n=== Test 2: Check LM Info ===")
-    lm_info = get_current_lm_info()
-    print(f"LM Info: {lm_info}")
-    
-    print("\n=== Test 3: ExecutabilityAnalyzer ===")
-    analyzer = ExecutabilityAnalyzer()
-    
-    # 샘플 코드
-    sample_code = """
-def login(username, password):
-    '''사용자 로그인 함수'''
-    if username == "admin" and password == "1234":
-        return True
-    return False
-
-def logout(user_id):
-    '''로그아웃 함수'''
-    print(f"User {user_id} logged out")
-    return True
-"""
-    
-    # 분석
-    result = analyzer.analyze_to_dict(
-        requirement="사용자 로그인 기능 테스트",
-        code_context=sample_code
-    )
-    
-    print(f"\nAnalysis Result:")
-    print(f"  Is Executable: {result['is_executable']}")
-    print(f"  Reasoning: {result['reasoning']}")
-    print(f"  Confidence: {result['confidence_score']}%")
-    
-    print("\n=== Test 4: Prediction Object ===")
-    prediction = analyzer(
-        requirement="사용자 로그아웃 기능",
-        code_context=sample_code
-    )
-    
-    print(f"  Prediction Type: {type(prediction)}")
-    print(f"  Is Executable: {prediction.is_executable}")
-    print(f"  Reasoning: {prediction.reasoning[:100]}...")
+    print("\n=== Test 1: Configure Bedrock DSPy ===")
+    try:
+        configure_bedrock_dspy(region="us-east-1")
+        print("DSPy configured successfully")
+        
+        print("\n=== Test 2: Check LM Info ===")
+        lm_info = get_current_lm_info()
+        print(f"LM Info: {lm_info}")
+        
+    except Exception as e:
+        print(f"Error: {e}")
+        print("\nMake sure AWS credentials are configured")
