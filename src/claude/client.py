@@ -8,24 +8,20 @@ from typing import List, Dict, Optional, Any
 import boto3
 import json
 import logging
+from config.config import get_settings
 
 logger = logging.getLogger(__name__)
-
+settings = get_settings()
 
 class BedrockClient:
     """
     AWS Bedrock Claude API 클라이언트
-    
-    Attributes:
-        client: Bedrock Runtime 클라이언트
-        model: Claude 모델 ID
-        region: AWS 리전
     """
     
     def __init__(
         self,
-        model: str = "anthropic.claude-3-5-sonnet-20241022-v2:0",
-        region: str = "us-east-1",
+        model: str = settings.bedrock_model, 
+        region: str = settings.aws_region,
         timeout: int = 60
     ):
         """
@@ -43,12 +39,14 @@ class BedrockClient:
         self.region = region
         
         try:
+            session = boto3.Session(region_name=self.region)
             self.client = boto3.client(
                 service_name='bedrock-runtime',
                 region_name=region,
                 config=boto3.session.Config(
                     connect_timeout=timeout,
-                    read_timeout=timeout
+                    read_timeout=timeout,
+                    retries={'max_attempts': 3}
                 )
             )
             logger.info(f"BedrockClient initialized: model={model}, region={region}")

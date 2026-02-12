@@ -20,18 +20,18 @@ class Settings(BaseSettings):
     """
     애플리케이션 설정 (AWS Bedrock)
     
-    AI 모델: AWS Bedrock (Claude 3.5 Sonnet)
+    AI 모델: AWS Bedrock (Claude Haiku 4.5) [cite: 9]
     """
     
     # ===== AWS Bedrock =====
-    aws_region: str = os.getenv("AWS_REGION", "us-east-1")
-    aws_access_key_id: str = os.getenv("AWS_ACCESS_KEY_ID", "")
-    aws_secret_access_key: str = os.getenv("AWS_SECRET_ACCESS_KEY", "")
+    aws_region: str = os.getenv("AWS_REGION", "ap-northeast-2")
+    aws_access_key_id: str = os.getenv("AWS_ACCESS_KEY_ID")
+    aws_secret_access_key: str = os.getenv("AWS_SECRET_ACCESS_KEY")
     
     # Bedrock 모델
     bedrock_model: str = os.getenv(
         "BEDROCK_MODEL",
-        "anthropic.claude-3-5-sonnet-20241022-v2:0"
+        "aanthropic.claude-haiku-4-5-20251001-v1:0"
     )
     
     # Bedrock Embeddings
@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     fastapi_port: int = int(os.getenv("FASTAPI_PORT", "8000"))
     
     # ===== S3 Storage (결과 저장용) =====
-    s3_bucket_name: str = os.getenv("S3_BUCKET_NAME", "probe-tests")
+    s3_bucket_name: str = os.getenv("S3_BUCKET_NAME", "probe-tests-results")
     s3_results_prefix: str = os.getenv("S3_RESULTS_PREFIX", "test-results/")
     
     # ===== Spring Boot Webhook =====
@@ -103,11 +103,9 @@ def validate_settings() -> bool:
     
     # AWS 자격증명 검증 (개발 환경에서는 IAM Role 사용 가능)
     if settings.is_production:
-        if not settings.aws_access_key_id:
-            errors.append("AWS_ACCESS_KEY_ID is not set (required for production)")
-        if not settings.aws_secret_access_key:
-            errors.append("AWS_SECRET_ACCESS_KEY is not set (required for production)")
-    
+        if not settings.aws_region:
+            errors.append("AAWS_REGION is not set)")
+               
     # GitHub Token 검증 (선택사항, public repo는 불필요)
     if not settings.github_token:
         logger.warning("GITHUB_TOKEN is not set (required for private repositories)")
