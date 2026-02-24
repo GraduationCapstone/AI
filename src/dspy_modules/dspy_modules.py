@@ -6,14 +6,15 @@ AWS Bedrock 기반 DSPy 설정 함수를 제공합니다.
 
 import dspy
 from typing import Dict, Any
+from config.config import settings
 import logging
 
 logger = logging.getLogger(__name__)
 
 
 def configure_bedrock_dspy(
-    model: str = "anthropic.claude-3-5-sonnet-20241022-v2:0",
-    region: str = "us-east-1",
+    model=settings.bedrock_model,
+    region=settings.aws_region,
     **kwargs
 ) -> None:
     """
@@ -35,8 +36,8 @@ def configure_bedrock_dspy(
         
         # Bedrock LM 초기화
         bedrock_lm = BedrockLM(
-            model=model,
-            region=region,
+            model=settings.bedrock_model,
+            region=settings.aws_region,
             **kwargs
         )
         

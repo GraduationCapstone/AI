@@ -8,10 +8,9 @@ from typing import List, Dict, Optional, Any
 import boto3
 import json
 import logging
-from config.config import get_settings
+from config.config import settings
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
 
 class BedrockClient:
     """

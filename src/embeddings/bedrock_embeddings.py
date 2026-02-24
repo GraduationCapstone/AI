@@ -88,7 +88,7 @@ class BedrockEmbeddings:
             raise ConnectionError(error_msg) from e
         
         # 통계
-        self._embedding_count = 0
+        # self._embedding_count = 0
     
     def _test_connection(self) -> None:
         """Bedrock 연결 테스트"""
@@ -145,7 +145,7 @@ class BedrockEmbeddings:
             response_body = json.loads(response['body'].read())
             embedding = response_body['embedding']
             
-            self._embedding_count += 1
+            # self._embedding_count += 1
             
             return np.array(embedding, dtype=np.float32)
             

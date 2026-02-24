@@ -25,8 +25,6 @@ class Settings(BaseSettings):
     
     # ===== AWS Bedrock =====
     aws_region: str = os.getenv("AWS_REGION", "ap-northeast-2")
-    aws_access_key_id: str = os.getenv("AWS_ACCESS_KEY_ID")
-    aws_secret_access_key: str = os.getenv("AWS_SECRET_ACCESS_KEY")
     
     # Bedrock 모델
     bedrock_model: str = os.getenv(
