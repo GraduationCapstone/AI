@@ -30,7 +30,7 @@ DSPy 모듈
     ... )
 """
 
-from .signatures import PlaywrightTestGenerationSignature
+from .signatures import TestPlanGenerationSignature, TestCodeGenerationSignature
 from .bedrock_lm import BedrockLM
 from .rag_generator import RAGPlaywrightGenerator
 
@@ -39,7 +39,7 @@ from .dspy_modules import configure_bedrock_dspy, get_current_lm_info
 
 __all__ = [
     # Signatures
-    "PlaywrightTestGenerationSignature",
+    "TestPlanGenerationSignature", "TestCodeGenerationSignature",
     
     # Modules
     "RAGPlaywrightGenerator",

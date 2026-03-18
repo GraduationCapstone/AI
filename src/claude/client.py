@@ -25,33 +25,28 @@ class BedrockClient:
     ):
         """
         BedrockClient 초기화
-        
-        Args:
-            model: Claude 모델 ID (Bedrock 형식)
-            region: AWS 리전
-            timeout: 요청 타임아웃 (초)
-        
-        Note:
-            AWS 인증은 IAM Role 또는 환경변수(AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)를 사용합니다.
         """
         self.model = model
         self.region = region
         
         try:
-            session = boto3.Session(region_name=self.region)
+            # ⭐ Throttling 방지를 위해 max_attempts를 늘리고 설정을 강화합니다.
             self.client = boto3.client(
                 service_name='bedrock-runtime',
                 region_name=region,
                 config=boto3.session.Config(
                     connect_timeout=timeout,
                     read_timeout=timeout,
-                    retries={'max_attempts': 3}
+                    retries={
+                        'max_attempts': 10,  # 재시도 횟수 상향
+                        'mode': 'adaptive'   # 속도 조절 모드 활성화
+                    }
                 )
             )
             logger.info(f"BedrockClient initialized: model={model}, region={region}")
             
-            # 연결 테스트
-            self._test_connection()
+            # 🛑 [DISABLED] 연결 테스트는 서버 기동 시 Throttling을 유발하므로 주석 처리합니다.
+            # self._test_connection()
             
         except Exception as e:
             error_msg = f"Failed to initialize Bedrock client: {e}"
@@ -59,62 +54,31 @@ class BedrockClient:
             raise ConnectionError(error_msg) from e
     
     def _test_connection(self) -> None:
-        """Bedrock API 연결 테스트"""
+        """Bedrock API 연결 테스트 (현재 비활성화됨)"""
         try:
-            # 간단한 테스트 요청
             test_body = {
                 "anthropic_version": "bedrock-2023-05-31",
                 "max_tokens": 10,
-                "messages": [
-                    {"role": "user", "content": "Hi"}
-                ]
+                "messages": [{"role": "user", "content": "Hi"}]
             }
-            
-            response = self.client.invoke_model(
-                modelId=self.model,
-                body=json.dumps(test_body)
-            )
-            
+            self.client.invoke_model(modelId=self.model, body=json.dumps(test_body))
             logger.info("Bedrock API connection test successful")
-            
         except Exception as e:
-            error_msg = f"Failed to connect to Bedrock API: {e}"
-            logger.error(error_msg)
-            raise ConnectionError(error_msg) from e
+            logger.error(f"Failed to connect to Bedrock API: {e}")
+            raise ConnectionError(f"Failed to connect to Bedrock API: {e}") from e
     
     def chat(
         self,
         messages: List[Dict[str, str]],
-        temperature: float = 0.7,
-        max_tokens: int = 2000,
+        temperature: float = 0.5, # 💡 기본값을 약간 낮춰서 더 정확한 응답 유도
+        max_tokens: int = 4000,    # 💡 충분한 코드 생성을 위해 상향
         system: Optional[str] = None,
         **kwargs
     ) -> str:
-        """
-        채팅 완성 요청
-        
-        Args:
-            messages: 메시지 리스트 (role, content)
-            temperature: 생성 온도
-            max_tokens: 최대 토큰 수
-            system: 시스템 프롬프트
-        
-        Returns:
-            str: 생성된 응답
-        """
+        """채팅 완성 요청"""
         try:
-            logger.debug(f"Bedrock chat request: {len(messages)} messages")
+            api_messages = [msg for msg in messages if msg["role"] != "system"]
             
-            # Bedrock API 형식으로 변환
-            api_messages = []
-            for msg in messages:
-                if msg["role"] != "system":  # system은 별도 처리
-                    api_messages.append({
-                        "role": msg["role"],
-                        "content": msg["content"]
-                    })
-            
-            # Request body 구성
             body = {
                 "anthropic_version": "bedrock-2023-05-31",
                 "max_tokens": max_tokens,
@@ -122,25 +86,19 @@ class BedrockClient:
                 "messages": api_messages
             }
             
-            # System 프롬프트 추가
             if system:
                 body["system"] = system
             
-            # 추가 파라미터
             if kwargs:
                 body.update(kwargs)
             
-            # API 호출
             response = self.client.invoke_model(
                 modelId=self.model,
                 body=json.dumps(body)
             )
             
-            # 응답 파싱
             response_body = json.loads(response['body'].read())
             content = response_body['content'][0]['text']
-            
-            logger.debug(f"Bedrock response: {len(content)} characters")
             
             return content
         
@@ -148,75 +106,15 @@ class BedrockClient:
             logger.error(f"Bedrock chat failed: {e}")
             raise
     
-    def generate(
-        self,
-        prompt: str,
-        system_message: Optional[str] = None,
-        temperature: float = 0.7,
-        max_tokens: int = 2000,
-        **kwargs
-    ) -> str:
-        """
-        단일 프롬프트로 텍스트 생성
-        
-        Args:
-            prompt: 사용자 프롬프트
-            system_message: 시스템 메시지
-            temperature: 생성 온도
-            max_tokens: 최대 토큰 수
-        
-        Returns:
-            str: 생성된 응답
-        """
-        messages = [{"role": "user", "content": prompt}]
-        
-        return self.chat(
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            system=system_message,
-            **kwargs
-        )
-    
+    def generate(self, prompt: str, **kwargs) -> str:
+        """단일 프롬프트로 텍스트 생성"""
+        return self.chat(messages=[{"role": "user", "content": prompt}], **kwargs)
+
     def get_model_info(self) -> Dict[str, Any]:
         """모델 정보 반환"""
         return {
             "model": self.model,
             "type": "Claude via AWS Bedrock",
             "region": self.region,
-            "status": "connected"
+            "status": "initialized"
         }
-
-
-# 사용 예시
-if __name__ == "__main__":
-    import logging
-    
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-    
-    try:
-        # IAM Role 또는 환경변수로 인증
-        client = BedrockClient(
-            region="us-east-1"  # 필요시 변경
-        )
-        
-        print("\n=== Test 1: Simple Generation ===")
-        response = client.generate(
-            "What is Python?",
-            system_message="You are a helpful assistant."
-        )
-        print(f"Response: {response[:200]}...")
-        
-        print("\n=== Test 2: Model Info ===")
-        info = client.get_model_info()
-        print(f"Model Info: {info}")
-        
-    except ConnectionError as e:
-        print(f"Error: {e}")
-        print("\nMake sure:")
-        print("1. AWS credentials are configured (IAM Role or environment variables)")
-        print("2. Bedrock is available in your region")
-        print("3. You have access to Claude models in Bedrock")

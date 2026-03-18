@@ -110,6 +110,10 @@ class CodeChunker:
             ".py": "python",
             ".js": "javascript",
             ".java": "java",
+            ".ts": "javascript",
+            ".tsx": "javascript",
+            ".html": "html",
+            ".css": "python",
         }
         
         all_chunks = []

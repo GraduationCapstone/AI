@@ -81,26 +81,3 @@ def get_current_lm_info() -> Dict[str, Any]:
             "configured": False,
             "error": "DSPy LM not configured. Call configure_bedrock_dspy() first."
         }
-
-
-# 사용 예시
-if __name__ == "__main__":
-    import logging
-    
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-    
-    print("\n=== Test 1: Configure Bedrock DSPy ===")
-    try:
-        configure_bedrock_dspy(region="us-east-1")
-        print("DSPy configured successfully")
-        
-        print("\n=== Test 2: Check LM Info ===")
-        lm_info = get_current_lm_info()
-        print(f"LM Info: {lm_info}")
-        
-    except Exception as e:
-        print(f"Error: {e}")
-        print("\nMake sure AWS credentials are configured")

@@ -199,7 +199,7 @@ class RAGPipeline:
         self,
         requirement: str,
         top_k: int = 5,
-        max_chars: int = 4000,
+        max_chars: int = 12000,
         file_tree: Optional[str] = None
     ) -> str:
         """

@@ -7,7 +7,7 @@ AWS Bedrock 기반 설정
 import os
 from typing import Optional
 from dotenv import load_dotenv
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 import logging
 
 logger = logging.getLogger(__name__)
@@ -24,12 +24,12 @@ class Settings(BaseSettings):
     """
     
     # ===== AWS Bedrock =====
-    aws_region: str = os.getenv("AWS_REGION", "ap-northeast-2")
+    aws_region: str = os.getenv("AWS_REGION", "ap-northeast-1")
     
     # Bedrock 모델
     bedrock_model: str = os.getenv(
-        "BEDROCK_MODEL",
-        "aanthropic.claude-haiku-4-5-20251001-v1:0"
+        "BEDROCK_MODEL", 
+        "anthropic.claude-3-haiku-20240307-v1:0"
     )
     
     # Bedrock Embeddings
@@ -38,6 +38,11 @@ class Settings(BaseSettings):
         "amazon.titan-embed-text-v2:0"
     )
     bedrock_embedding_dimension: int = int(os.getenv("BEDROCK_EMBEDDING_DIMENSION", "1024"))
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=True,
+        extra="ignore")
     
     # ===== GitHub =====
     github_token: str = os.getenv("GITHUB_TOKEN", "")
@@ -57,10 +62,10 @@ class Settings(BaseSettings):
     )
     
     # ===== RAG 설정 =====
-    rag_chunk_size: int = int(os.getenv("RAG_CHUNK_SIZE", "1000"))
+    rag_chunk_size: int = int(os.getenv("RAG_CHUNK_SIZE", "15000"))
     rag_chunk_overlap: int = int(os.getenv("RAG_CHUNK_OVERLAP", "200"))
     rag_top_k: int = int(os.getenv("RAG_TOP_K", "5"))
-    rag_max_context_chars: int = int(os.getenv("RAG_MAX_CONTEXT_CHARS", "4000"))
+    rag_max_context_chars: int = int(os.getenv("RAG_MAX_CONTEXT_CHARS", "15000"))
     
     # ===== Logging =====
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
@@ -77,10 +82,6 @@ class Settings(BaseSettings):
     def is_development(self) -> bool:
         """개발 환경 여부"""
         return self.environment.lower() == "development"
-    
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
 
 
 # 전역 설정 객체
