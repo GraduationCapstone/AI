@@ -4,7 +4,6 @@ DSPy 모듈
 이 패키지는 DSPy와 AWS Bedrock을 사용한 AI 기반 테스트 코드 생성을 제공합니다.
 
 주요 컴포넌트:
-- BedrockLM: DSPy용 Bedrock 래퍼
 - RAGPlaywrightGenerator: RAG 통합 테스트 생성기
 - configure_bedrock_dspy: Bedrock 초기화
 
@@ -31,7 +30,6 @@ DSPy 모듈
 """
 
 from .signatures import TestPlanGenerationSignature, TestCodeGenerationSignature
-from .bedrock_lm import BedrockLM
 from .rag_generator import RAGPlaywrightGenerator
 
 # configure 함수만 dspy_modules에서 가져옴
@@ -49,7 +47,6 @@ __all__ = [
     "get_current_lm_info",
     
     # LM
-    "BedrockLM",
 ]
 
 # 버전 정보

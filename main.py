@@ -242,6 +242,7 @@ def main():
     print("✨ 서버를 시작합니다...\n")
     
     # 서버 실행
+# 서버 실행
     try:
         uvicorn.run(
             "src.api.main:app",
@@ -249,6 +250,11 @@ def main():
             port=port,
             workers=workers,
             reload=reload,
+            reload_excludes=[
+                str(project_root / "output_codes"),
+                str(project_root / "logs"),
+                str(project_root / "temp"),
+            ],
             log_level=log_level.lower(),
             access_log=True,
             use_colors=True

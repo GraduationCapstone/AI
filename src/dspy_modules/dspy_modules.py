@@ -32,17 +32,14 @@ def configure_bedrock_dspy(
         >>> configure_bedrock_dspy(region="us-east-1")
     """
     try:
-        from .bedrock_lm import BedrockLM
-        
-        # Bedrock LM 초기화
-        bedrock_lm = BedrockLM(
-            model=settings.bedrock_model,
-            region=settings.aws_region,
-            **kwargs
-        )
+        lm = dspy.LM(
+            f"bedrock/{settings.bedrock_model}",
+            temperature = 0.1,
+            max_tokens = 8000,)
+            
         
         # DSPy 설정
-        dspy.settings.configure(lm=bedrock_lm)
+        dspy.settings.configure(lm=lm)
         
         logger.info(
             f"DSPy configured with Bedrock: "

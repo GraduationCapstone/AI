@@ -165,4 +165,8 @@ models/
 
 # PostgreSQL dumps
 *.sql
-*.dump
+*.dumpoutput_codes/
+venv/
+output_codes/
+venv/
+test-results/
