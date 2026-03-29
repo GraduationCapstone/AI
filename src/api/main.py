@@ -58,13 +58,11 @@ app.add_middleware(
 # ── 모델 ─────────────────────────────────────────────────────────────────────
 
 class GeneratePlanRequest(BaseModel):
-    executionId: int
-    scenarioId: Optional[int] = None
+    executionId: int 
     targetBranch: str = "main"
-    # 아래는 AI 서버 내부용 (Spring dispatch 시 별도 전달 또는 DB 조회로 채움)
-    repository_url: Optional[HttpUrl] = None
-    requirement: Optional[str] = None
-    auth_token: Optional[str] = None
+    repository_url: Optional[HttpUrl] = "https://github.com/Danimo1/logintest"
+    requirement: Optional[str] = "base_url: https://danimo1.github.io/logintest/\n\n이 레포 분석해서 로그인 시나리오 테스트 계획서 작성하고 playwright 테스트 코드 생성"
+    auth_token: Optional[str] = "토큰값"
     callback_url: str = "http://10.0.1.243:8080/api/agent/callback"
 
     @property
@@ -77,12 +75,11 @@ class GeneratePlanRequest(BaseModel):
 
 
 class GenerateTestRequest(BaseModel):
-    executionId: int
-    scenarioId: Optional[int] = None
+    executionId: int 
     targetBranch: str = "main"
-    repository_url: Optional[HttpUrl] = None
-    requirement: Optional[str] = None
-    auth_token: Optional[str] = None
+    repository_url: Optional[HttpUrl] = "https://github.com/Danimo1/logintest"
+    requirement: Optional[str] = "base_url: https://danimo1.github.io/logintest/\n\n이 레포 분석해서 로그인 시나리오 테스트 계획서 작성하고 playwright 테스트 코드 생성"
+    auth_token: Optional[str] = "토큰값"
     callback_url: str = "http://10.0.1.243:8080/api/agent/callback"
 
     @property
@@ -774,6 +771,7 @@ async def generate_test_background(
     summary="테스트 계획서 생성",
     description=(
         "GitHub 레포지토리를 분석하여 SIT 시나리오 형식의 테스트 계획서(Excel)를 생성합니다. "
+        "executionId에는 본인이 사용할 값을 넣어주시면 됩니다. 동일한 executionId로 generate-test를 호출하여 계획서 기반 테스트 코드 생성 및 실행이 가능합니다. "
         "완료 시 callback_url로 결과를 전송합니다."
     ),
     responses={422: {"model": None}},
