@@ -250,15 +250,11 @@ def main():
             port=port,
             workers=workers,
             reload=reload,
-            reload_excludes=[
-                str(project_root / "output_codes"),
-                str(project_root / "logs"),
-                str(project_root / "temp"),
-            ],
+            reload_dirs=[str(project_root / "src"), str(project_root / "config")],
             log_level=log_level.lower(),
             access_log=True,
             use_colors=True
-        )
+)
     except KeyboardInterrupt:
         print("\n\n👋 서버를 종료합니다...")
         logger.info("서버 종료")

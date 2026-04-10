@@ -58,12 +58,12 @@ app.add_middleware(
 # ── 모델 ─────────────────────────────────────────────────────────────────────
 
 class GeneratePlanRequest(BaseModel):
-    executionId: int 
+    executionId: int
     targetBranch: str = "main"
     repository_url: Optional[HttpUrl] = "https://github.com/Danimo1/logintest"
     requirement: Optional[str] = "base_url: https://danimo1.github.io/logintest/\n\n이 레포 분석해서 로그인 시나리오 테스트 계획서 작성하고 playwright 테스트 코드 생성"
     auth_token: Optional[str] = "토큰값"
-    callback_url: str = "http://10.0.1.243:8080/api/agent/callback"
+    callback_url: str = "http://10.0.1.243:8080/api/agent/callback/plan"
 
     @property
     def execution_id(self) -> int:
@@ -75,12 +75,12 @@ class GeneratePlanRequest(BaseModel):
 
 
 class GenerateTestRequest(BaseModel):
-    executionId: int 
+    executionId: int
     targetBranch: str = "main"
     repository_url: Optional[HttpUrl] = "https://github.com/Danimo1/logintest"
     requirement: Optional[str] = "base_url: https://danimo1.github.io/logintest/\n\n이 레포 분석해서 로그인 시나리오 테스트 계획서 작성하고 playwright 테스트 코드 생성"
     auth_token: Optional[str] = "토큰값"
-    callback_url: str = "http://10.0.1.243:8080/api/agent/callback"
+    callback_url: str = "http://10.0.1.243:8080/api/agent/callback/test"
 
     @property
     def execution_id(self) -> int:
@@ -91,18 +91,40 @@ class GenerateTestRequest(BaseModel):
         return self.targetBranch
 
 
+class ScenarioDetail(BaseModel):
+    scenarioName: Optional[str] = None
+    description: Optional[str] = None
+    testCaseId: Optional[str] = None
+    testCaseName: Optional[str] = None
+    precondition: Optional[str] = None
+    testData: Optional[str] = None
+    executionSteps: Optional[str] = None
+    result: Optional[str] = None
+
+
 class TestCaseResult(BaseModel):
+    test_case_number: Optional[str] = None
     case_name: Optional[str] = None
-    status: str
+    test_code_name: Optional[str] = None
+    status: str  # "PASS" or "FAIL"
+    duration_seconds: Optional[float] = None
     error_log: Optional[str] = None
-    screenshot_s3_url: Optional[str] = None
+    test_code: Optional[str] = None
+    scenario_detail: Optional[ScenarioDetail] = None
+    screenshot_s3_urls: Optional[List[str]] = None
 
 
-class CallbackPayload(BaseModel):
+class PlanCallbackPayload(BaseModel):
+    execution_id: int
+    plan_s3_url: Optional[str] = None
+
+
+class TestCallbackPayload(BaseModel):
     execution_id: int
     status: str
-    duration_ms: Optional[int] = None
-    report_s3_url: Optional[str] = None
+    duration_seconds: Optional[float] = None
+    plan_result_s3_url: Optional[str] = None
+    test_spec_s3_url: Optional[str] = None
     results: Optional[List[TestCaseResult]] = None
 
 
@@ -165,7 +187,6 @@ def _load_documents(repo_path: str) -> List[Document]:
 
 
 async def _clone_and_chunk(repo_url: str, branch: str, auth_token: Optional[str], execution_id: int):
-    """클론 → 파일 로드 → 청킹 공통 로직"""
     repo_path = await asyncio.to_thread(_clone_sync, repo_url, branch, auth_token)
 
     logger.info(f"[{execution_id}] Scanning & loading files...")
@@ -191,6 +212,7 @@ async def _clone_and_chunk(repo_url: str, branch: str, auth_token: Optional[str]
 S3_BUCKET = "kiwi-test-artifacts-probe-2026"
 S3_REGION = "ap-northeast-1"
 
+
 def _upload_to_s3(local_path: str, s3_key: str) -> Optional[str]:
     try:
         s3 = boto3.client("s3", region_name=S3_REGION)
@@ -201,6 +223,7 @@ def _upload_to_s3(local_path: str, s3_key: str) -> Optional[str]:
     except Exception as e:
         logger.warning(f"S3 upload skipped: {e}")
         return None
+
 
 def _upload_bytes_to_s3(data: bytes, s3_key: str, content_type: str) -> Optional[str]:
     try:
@@ -214,7 +237,7 @@ def _upload_bytes_to_s3(data: bytes, s3_key: str, content_type: str) -> Optional
         return None
 
 
-async def send_callback(callback_url: str, payload: CallbackPayload) -> None:
+async def send_plan_callback(callback_url: str, payload: PlanCallbackPayload) -> None:
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
@@ -223,15 +246,28 @@ async def send_callback(callback_url: str, payload: CallbackPayload) -> None:
                 headers={"Content-Type": "application/json"}
             )
             resp.raise_for_status()
-            logger.info(f"Callback OK → {callback_url} (execution_id={payload.execution_id})")
+            logger.info(f"Plan Callback OK → {callback_url} (execution_id={payload.execution_id})")
     except Exception as e:
-        logger.error(f"Callback FAILED → {callback_url} (execution_id={payload.execution_id}): {e}")
+        logger.error(f"Plan Callback FAILED → {callback_url} (execution_id={payload.execution_id}): {e}")
+
+
+async def send_test_callback(callback_url: str, payload: TestCallbackPayload) -> None:
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                callback_url,
+                json=payload.model_dump(),
+                headers={"Content-Type": "application/json"}
+            )
+            resp.raise_for_status()
+            logger.info(f"Test Callback OK → {callback_url} (execution_id={payload.execution_id})")
+    except Exception as e:
+        logger.error(f"Test Callback FAILED → {callback_url} (execution_id={payload.execution_id}): {e}")
 
 
 # ── PLAN 전용 함수 ────────────────────────────────────────────────────────────
 
 def _run_plan_pipeline(chunked_docs, file_tree: str, requirement: str, execution_id: int) -> dict:
-    """STEP 1만: 테스트 계획서(Excel) 생성"""
     from src.dspy_modules.rag_generator import RAGPlaywrightGenerator as Gen
     generator = Gen(region=settings.aws_region)
     generator.index_documents(chunked_docs, file_tree=file_tree)
@@ -245,12 +281,10 @@ def _run_plan_pipeline(chunked_docs, file_tree: str, requirement: str, execution
 # ── TEST 전용 함수 ────────────────────────────────────────────────────────────
 
 def _run_test_pipeline(chunked_docs, file_tree: str, requirement: str, execution_id: int) -> dict:
-    """STEP 2만: 테스트 코드 생성 (계획서는 이미 존재)"""
     from src.dspy_modules.rag_generator import RAGPlaywrightGenerator as Gen
     generator = Gen(region=settings.aws_region)
     generator.index_documents(chunked_docs, file_tree=file_tree)
 
-    # 기존 계획서 로드
     today = datetime.now().strftime("%Y%m%d")
     plan_path = os.path.join(OUTPUT_DIR, f"{today}_{execution_id}_plan.xlsx")
 
@@ -265,10 +299,7 @@ def _run_test_pipeline(chunked_docs, file_tree: str, requirement: str, execution
 def _run_playwright(spec_path: str, execution_id: int) -> List[Dict]:
     result_dir = tempfile.mkdtemp()
     json_report_path = os.path.join(result_dir, "report.json")
-
     try:
-        # JSON 리포트를 파일로 직접 지정 (--reporter=json 단독으로 쓰면 stdout으로 나옴)
-        # --output-file 대신 PLAYWRIGHT_JSON_OUTPUT_NAME 환경변수 사용
         env = {
             **os.environ,
             "CI": "1",
@@ -288,7 +319,6 @@ def _run_playwright(spec_path: str, execution_id: int) -> List[Dict]:
         )
         logger.info(f"[{execution_id}] Playwright exit code: {proc.returncode}")
 
-        # stderr 확인 (exit code 1은 테스트 실패이므로 에러로 처리하지 않음)
         if proc.stderr:
             stderr_preview = proc.stderr.decode(errors="ignore")[:300]
             if stderr_preview.strip():
@@ -296,7 +326,6 @@ def _run_playwright(spec_path: str, execution_id: int) -> List[Dict]:
 
         results = []
 
-        # 1순위: PLAYWRIGHT_JSON_OUTPUT_NAME으로 저장된 파일
         if os.path.exists(json_report_path) and os.path.getsize(json_report_path) > 0:
             try:
                 with open(json_report_path) as jf:
@@ -306,7 +335,6 @@ def _run_playwright(spec_path: str, execution_id: int) -> List[Dict]:
             except Exception as e:
                 logger.warning(f"[{execution_id}] JSON file parse failed: {e}")
 
-        # 2순위: stdout에서 JSON 파싱 (일부 버전은 stdout으로 출력)
         if not results and proc.stdout:
             stdout = proc.stdout.decode(errors="ignore").strip()
             try:
@@ -315,7 +343,6 @@ def _run_playwright(spec_path: str, execution_id: int) -> List[Dict]:
             except Exception:
                 pass
 
-        # 3순위: 텍스트 파싱 (fallback)
         if not results:
             combined = ""
             if proc.stdout:
@@ -324,6 +351,7 @@ def _run_playwright(spec_path: str, execution_id: int) -> List[Dict]:
                 combined += proc.stderr.decode(errors="ignore")
             results = _parse_playwright_text(combined, execution_id)
 
+        logger.info(f"[{execution_id}] pw_results sample: {results[:2]}")
         return results
 
     except subprocess.TimeoutExpired:
@@ -363,184 +391,25 @@ def _parse_playwright_json(report: dict) -> List[Dict]:
     for suite in report.get("suites", []):
         walk_suite(suite)
 
-    return results or [{"case_name": "Playwright Execution", "status": "FAIL", "error_log": "No results", "screenshot_path": None}]
+    return results or [{"case_name": "Playwright Execution", "status": "FAIL",
+                        "error_log": "No results", "screenshot_path": None}]
 
 
 def _parse_playwright_text(output: str, execution_id: int) -> List[Dict]:
     results = []
     for match in re.finditer(r'✓\s+\d+\s+(.+?)\s+\(\d+', output):
-        results.append({"case_name": match.group(1).strip(), "status": "SUCCESS", "error_log": None, "screenshot_path": None})
+        results.append({"case_name": match.group(1).strip(), "status": "SUCCESS",
+                        "error_log": None, "screenshot_path": None})
     for match in re.finditer(r'✘\s+\d+\s+(.+?)\s+\(\d+', output):
-        results.append({"case_name": match.group(1).strip(), "status": "FAIL", "error_log": "Test failed", "screenshot_path": None})
+        results.append({"case_name": match.group(1).strip(), "status": "FAIL",
+                        "error_log": "Test failed", "screenshot_path": None})
     if not results:
         passed = "passed" in output.lower()
-        results.append({"case_name": "Playwright Execution", "status": "SUCCESS" if passed else "FAIL",
-                        "error_log": None if passed else output[-500:], "screenshot_path": None})
+        results.append({"case_name": "Playwright Execution",
+                        "status": "SUCCESS" if passed else "FAIL",
+                        "error_log": None if passed else output[-500:],
+                        "screenshot_path": None})
     return results
-
-
-def _generate_result_screenshot(case_idx: int, all_results: List[Dict]) -> Optional[str]:
-    screenshot_dir = os.path.join(OUTPUT_DIR, "test-results")
-    os.makedirs(screenshot_dir, exist_ok=True)
-    screenshot_path = os.path.join(screenshot_dir, f"result_{str(case_idx).zfill(3)}.png")
-
-    rows = ""
-    for i, r in enumerate(all_results, 1):
-        is_current = (i == case_idx)
-        bg = "#fff9c4" if is_current else "white"
-        border_style = "2px solid #4f46e5" if is_current else "1px solid #e5e7eb"
-        passed = "1" if r.get("status") == "SUCCESS" else ""
-        failed = "1" if r.get("status") == "FAIL" else ""
-        p_color = "#16a34a" if passed else "#9ca3af"
-        f_color = "#dc2626" if failed else "#9ca3af"
-        fw = "bold" if is_current else "normal"
-        rows += f"""<tr style="background:{bg};">
-            <td style="padding:8px 12px;text-align:center;font-weight:{fw};">{i}</td>
-            <td style="padding:8px 12px;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:{fw};outline:{border_style};">{r.get('case_name', '')}</td>
-            <td style="padding:8px 12px;text-align:center;color:{p_color};font-weight:bold;">{passed}</td>
-            <td style="padding:8px 12px;text-align:center;color:{f_color};font-weight:bold;">{failed}</td>
-        </tr>"""
-
-    html = f"""<!DOCTYPE html><html><head><meta charset="UTF-8">
-<style>
-  body {{ margin:0; padding:20px; font-family:Arial,sans-serif; background:#f4f6f9; }}
-  .card {{ background:white; border-radius:12px; box-shadow:0 2px 8px rgba(0,0,0,.1); overflow:hidden; max-width:560px; margin:0 auto; }}
-  .header {{ background:#4f46e5; color:white; padding:14px 20px; font-size:16px; font-weight:bold; }}
-  table {{ width:100%; border-collapse:collapse; }}
-  th {{ background:#f8fafc; padding:10px 12px; text-align:left; font-size:12px; color:#6b7280; border-bottom:2px solid #e5e7eb; }}
-  td {{ font-size:13px; border-bottom:1px solid #f1f5f9; }}
-</style></head><body>
-<div class="card">
-  <div class="header">Testing Results</div>
-  <table><thead><tr>
-    <th style="width:40px;text-align:center;">No</th>
-    <th>Test Case</th>
-    <th style="width:60px;text-align:center;color:#16a34a;">Passed</th>
-    <th style="width:60px;text-align:center;color:#dc2626;">Failed</th>
-  </tr></thead><tbody>{rows}</tbody></table>
-</div></body></html>"""
-
-    html_path = os.path.join(screenshot_dir, f"result_{str(case_idx).zfill(3)}.html")
-    with open(html_path, "w", encoding="utf-8") as f:
-        f.write(html)
-
-    # ── 버그2 수정: playwright CLI 대신 Node.js 인라인 스크립트 사용 ──
-    js_script = f"""
-const {{ chromium }} = require('playwright');
-(async () => {{
-  const browser = await chromium.launch();
-  const page = await browser.newPage();
-  await page.setViewportSize({{ width: 620, height: {max(120, len(all_results) * 36 + 80)} }});
-  await page.goto('file://{html_path}');
-  await page.waitForTimeout(300);
-  await page.screenshot({{ path: '{screenshot_path}', fullPage: true }});
-  await browser.close();
-}})();
-"""
-    js_path = os.path.join(screenshot_dir, f"capture_{str(case_idx).zfill(3)}.js")
-    try:
-        with open(js_path, "w") as f:
-            f.write(js_script)
-        subprocess.run(
-            ["node", js_path],
-            capture_output=True, timeout=30,
-            cwd="/home/ec2-user/AI"
-        )
-        return screenshot_path if os.path.exists(screenshot_path) else None
-    except Exception as e:
-        logger.warning(f"Result screenshot failed: {e}")
-        return None
-    finally:
-        for p in [html_path, js_path]:
-            if os.path.exists(p):
-                os.remove(p)
-
-def _generate_summary_screenshot(all_results: List[Dict]) -> Optional[str]:
-    """전체 결과를 하나의 스크린샷으로 생성"""
-    screenshot_dir = os.path.join(OUTPUT_DIR, "test-results")
-    os.makedirs(screenshot_dir, exist_ok=True)
-    summary_path = os.path.join(screenshot_dir, "summary.png")
-
-    total = len(all_results)
-    passed = sum(1 for r in all_results if r.get("status") == "SUCCESS")
-    failed = total - passed
-
-    rows = ""
-    for i, r in enumerate(all_results, 1):
-        status = r.get("status", "FAIL")
-        p = "1" if status == "SUCCESS" else ""
-        f = "1" if status == "FAIL" else ""
-        p_color = "#16a34a" if p else "#9ca3af"
-        f_color = "#dc2626" if f else "#9ca3af"
-        bg = "#f0fdf4" if status == "SUCCESS" else "#fff1f2"
-        rows += f"""<tr style="background:{bg};">
-            <td style="padding:7px 12px;text-align:center;">{i}</td>
-            <td style="padding:7px 12px;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{r.get('case_name', '')}</td>
-            <td style="padding:7px 12px;text-align:center;color:{p_color};font-weight:bold;">{p}</td>
-            <td style="padding:7px 12px;text-align:center;color:{f_color};font-weight:bold;">{f}</td>
-        </tr>"""
-
-    html = f"""<!DOCTYPE html><html><head><meta charset="UTF-8">
-<style>
-  body {{ margin:0; padding:24px; font-family:Arial,sans-serif; background:#f4f6f9; }}
-  .card {{ background:white; border-radius:12px; box-shadow:0 2px 8px rgba(0,0,0,.1); overflow:hidden; max-width:600px; margin:0 auto; }}
-  .header {{ background:#4f46e5; color:white; padding:16px 20px; font-size:17px; font-weight:bold; }}
-  .summary {{ display:flex; gap:24px; padding:14px 20px; background:#f8fafc; border-bottom:1px solid #e5e7eb; font-size:13px; }}
-  .badge {{ padding:4px 12px; border-radius:20px; font-weight:bold; }}
-  .pass {{ background:#dcfce7; color:#16a34a; }}
-  .fail {{ background:#fee2e2; color:#dc2626; }}
-  table {{ width:100%; border-collapse:collapse; }}
-  th {{ background:#f1f5f9; padding:10px 12px; text-align:left; font-size:12px; color:#6b7280; border-bottom:2px solid #e5e7eb; }}
-  td {{ font-size:13px; border-bottom:1px solid #f1f5f9; }}
-</style></head><body>
-<div class="card">
-  <div class="header">Testing Results Summary</div>
-  <div class="summary">
-    <span>Total: <strong>{total}</strong></span>
-    <span class="badge pass">Passed: {passed}</span>
-    <span class="badge fail">Failed: {failed}</span>
-  </div>
-  <table><thead><tr>
-    <th style="width:40px;text-align:center;">No</th>
-    <th>Test Case</th>
-    <th style="width:65px;text-align:center;color:#16a34a;">Passed</th>
-    <th style="width:65px;text-align:center;color:#dc2626;">Failed</th>
-  </tr></thead><tbody>{rows}</tbody></table>
-</div></body></html>"""
-
-    html_path = os.path.join(screenshot_dir, "summary.html")
-    with open(html_path, "w", encoding="utf-8") as f:
-        f.write(html)
-
-    js_script = f"""
-const {{ chromium }} = require('playwright');
-(async () => {{
-  const browser = await chromium.launch();
-  const page = await browser.newPage();
-  await page.setViewportSize({{ width: 648, height: {max(200, total * 36 + 140)} }});
-  await page.goto('file://{html_path}');
-  await page.waitForTimeout(300);
-  await page.screenshot({{ path: '{summary_path}', fullPage: true }});
-  await browser.close();
-}})();
-"""
-    js_path = os.path.join(screenshot_dir, "capture_summary.js")
-    try:
-        with open(js_path, "w") as f:
-            f.write(js_script)
-        subprocess.run(
-            ["node", js_path],
-            capture_output=True, timeout=30,
-            cwd="/home/ec2-user/AI"
-        )
-        return summary_path if os.path.exists(summary_path) else None
-    except Exception as e:
-        logger.warning(f"Summary screenshot failed: {e}")
-        return None
-    finally:
-        for p in [html_path, js_path]:
-            if os.path.exists(p):
-                os.remove(p)
 
 
 def _update_excel_with_results(plan_path: str, pw_results: List[Dict]) -> None:
@@ -550,12 +419,21 @@ def _update_excel_with_results(plan_path: str, pw_results: List[Dict]) -> None:
         from openpyxl.styles import Font, Alignment, PatternFill
         from datetime import date
 
+        normalized = []
+        for r in pw_results:
+            if isinstance(r, dict):
+                normalized.append(r)
+            elif isinstance(r, str):
+                normalized.append({"case_name": r, "status": "FAIL", "error_log": None})
+            else:
+                normalized.append({"case_name": str(r), "status": "FAIL", "error_log": None})
+        pw_results = normalized
+
         wb = openpyxl.load_workbook(plan_path)
         ws = wb.active
         today = date.today().strftime("%Y-%m-%d")
         center = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-        # ── 버그1 수정: max_row 체크 제거, 필요하면 행 자체를 추가 ──
         for i, res in enumerate(pw_results):
             row = 6 + i
 
@@ -572,17 +450,15 @@ def _update_excel_with_results(plan_path: str, pw_results: List[Dict]) -> None:
             ws.cell(row=row, column=13, value=today).alignment = center
             ws.cell(row=row, column=14, value="user").alignment = center
 
-            # ── 버그2 수정: 스크린샷 생성 후 S3 URL 대신 로컬 파일로 삽입 ──
-            screenshot_path = _generate_result_screenshot(
-                case_idx=i + 1,
-                all_results=pw_results
+            screenshot_path = os.path.join(
+                "/home/ec2-user/AI/test-results",
+                f"screenshot_{str(i+1).zfill(3)}.png"
             )
-            if screenshot_path and os.path.exists(screenshot_path):
+            if os.path.exists(screenshot_path):
                 try:
                     img = XLImage(screenshot_path)
                     img.width = 160
                     img.height = 100
-                    # 병합 셀이 있으면 삽입 위치 조정
                     ws.row_dimensions[row].height = 80
                     ws.add_image(img, f"K{row}")
                 except Exception as e:
@@ -595,6 +471,7 @@ def _update_excel_with_results(plan_path: str, pw_results: List[Dict]) -> None:
         logger.info(f"Excel updated: {plan_path} ({len(pw_results)} rows)")
     except Exception as e:
         logger.error(f"Failed to update excel: {e}")
+        raise
 
 
 # ── 앱 이벤트 ────────────────────────────────────────────────────────────────
@@ -630,41 +507,29 @@ async def generate_plan_background(
             raise ValueError(result.get("message", "Plan generation failed"))
 
         plan_path = result.get("saved_plan", "")
-        test_cases = result.get("test_cases", [])
 
-        # S3 업로드
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         report_s3_url = None
         if plan_path and os.path.exists(plan_path):
             s3_key = f"executions/{execution_id}/plan.xlsx"
             report_s3_url = await asyncio.to_thread(_upload_to_s3, plan_path, s3_key)
-
-        case_results = [
-            TestCaseResult(case_name=tc.get("case_name", f"Case {i+1}"), status="SUCCESS")
-            for i, tc in enumerate(test_cases)
-        ] or [TestCaseResult(case_name="Plan Generated", status="SUCCESS")]
 
         execution_store[execution_id] = {
             "execution_id": execution_id,
             "status": "COMPLETED",
             "plan_path": plan_path,
             "plan_s3_url": report_s3_url,
-            "test_cases": test_cases,
         }
 
-        duration_ms = int((time.time() - started_at) * 1000)
-        await send_callback(callback_url, CallbackPayload(
-            execution_id=execution_id, status="COMPLETED",
-            duration_ms=duration_ms, report_s3_url=report_s3_url,
-            results=case_results,
+        await send_plan_callback(callback_url, PlanCallbackPayload(
+            execution_id=execution_id,
+            plan_s3_url=report_s3_url,
         ))
 
     except Exception as e:
         logger.error(f"[{execution_id}] [PLAN] Job failed: {e}")
-        await send_callback(callback_url, CallbackPayload(
-            execution_id=execution_id, status="FAILED",
-            duration_ms=int((time.time() - started_at) * 1000),
-            results=[TestCaseResult(status="FAIL", error_log=str(e))],
+        await send_plan_callback(callback_url, PlanCallbackPayload(
+            execution_id=execution_id,
+            plan_s3_url=None,
         ))
     finally:
         if repo_path and os.path.exists(repo_path):
@@ -690,46 +555,49 @@ async def generate_test_background(
         spec_path = result.get("saved_file", "")
         plan_path = result.get("saved_plan", "")
 
-        # Playwright 실행
         logger.info(f"[{execution_id}] [TEST] Running Playwright...")
         pw_results = await asyncio.to_thread(_run_playwright, spec_path, execution_id)
         logger.info(f"[{execution_id}] [TEST] Playwright done: {len(pw_results)} results")
 
-        # 엑셀 결과 업데이트 (각 케이스별 개별 스크린샷 → K열 삽입)
+        # 엑셀 K열에 실제 Playwright 스크린샷 삽입
         if plan_path and os.path.exists(plan_path):
             await asyncio.to_thread(_update_excel_with_results, plan_path, pw_results)
 
-        # 종합 스크린샷 1개 생성 → S3 업로드
-        summary_s3_url = None
-        summary_screenshot_path = await asyncio.to_thread(
-            _generate_summary_screenshot, pw_results
-        )
-        if summary_screenshot_path and os.path.exists(summary_screenshot_path):
-            s3_key = f"executions/{execution_id}/screenshots/summary.png"
-            with open(summary_screenshot_path, "rb") as f:
-                summary_bytes = f.read()
-            summary_s3_url = await asyncio.to_thread(
-                _upload_bytes_to_s3, summary_bytes, s3_key, "image/png"
-            )
-
-        # 엑셀, 테스트코드 S3 업로드
+        # S3 업로드
         report_s3_url = None
         if plan_path and os.path.exists(plan_path):
             s3_key = f"executions/{execution_id}/plan_result.xlsx"
             report_s3_url = await asyncio.to_thread(_upload_to_s3, plan_path, s3_key)
 
+        spec_s3_url = None
         if spec_path and os.path.exists(spec_path):
             s3_key = f"executions/{execution_id}/test.spec.js"
-            await asyncio.to_thread(_upload_to_s3, spec_path, s3_key)
+            spec_s3_url = await asyncio.to_thread(_upload_to_s3, spec_path, s3_key)
 
-        # case_results 구성 (모든 케이스에 종합 스크린샷 URL 첨부)
+        # case_results 구성 + 스크린샷 S3 업로드
         case_results = []
-        for r in pw_results:
+        for i, r in enumerate(pw_results):
+            screenshot_s3_urls = []
+            screenshot_path = os.path.join(
+                "/home/ec2-user/AI/test-results",
+                f"screenshot_{str(i+1).zfill(3)}.png"
+            )
+            if os.path.exists(screenshot_path):
+                s3_key = f"executions/{execution_id}/screenshots/screenshot_{str(i+1).zfill(3)}.png"
+                with open(screenshot_path, "rb") as f:
+                    screenshot_bytes = f.read()
+                url = await asyncio.to_thread(
+                    _upload_bytes_to_s3, screenshot_bytes, s3_key, "image/png"
+                )
+                if url:
+                    screenshot_s3_urls.append(url)
+
             case_results.append(TestCaseResult(
+                test_case_number=str(i + 1),
                 case_name=r.get("case_name"),
-                status=r.get("status", "FAIL"),
+                status="PASS" if r.get("status") == "SUCCESS" else "FAIL",
                 error_log=r.get("error_log"),
-                screenshot_s3_url=summary_s3_url,
+                screenshot_s3_urls=screenshot_s3_urls,
             ))
 
         overall_status = "COMPLETED"
@@ -741,22 +609,32 @@ async def generate_test_background(
             "status": overall_status,
             "test_code": result.get("test_code", ""),
             "plan_s3_url": report_s3_url,
+            "spec_s3_url": spec_s3_url,
             "results": [r.model_dump() for r in case_results],
         }
 
-        duration_ms = int((time.time() - started_at) * 1000)
-        await send_callback(callback_url, CallbackPayload(
-            execution_id=execution_id, status=overall_status,
-            duration_ms=duration_ms, report_s3_url=report_s3_url,
+        duration_seconds = round(time.time() - started_at, 1)
+        await send_test_callback(callback_url, TestCallbackPayload(
+            execution_id=execution_id,
+            status=overall_status,
+            duration_seconds=duration_seconds,
+            plan_result_s3_url=report_s3_url,
+            test_spec_s3_url=spec_s3_url,
             results=case_results,
         ))
 
     except Exception as e:
         logger.error(f"[{execution_id}] [TEST] Job failed: {e}")
-        await send_callback(callback_url, CallbackPayload(
-            execution_id=execution_id, status="FAILED",
-            duration_ms=int((time.time() - started_at) * 1000),
-            results=[TestCaseResult(status="FAIL", error_log=str(e))],
+        await send_test_callback(callback_url, TestCallbackPayload(
+            execution_id=execution_id,
+            status="FAILED",
+            duration_seconds=round(time.time() - started_at, 1),
+            results=[TestCaseResult(
+                test_case_number="0",
+                case_name="Error",
+                status="FAIL",
+                error_log=str(e),
+            )],
         ))
     finally:
         if repo_path and os.path.exists(repo_path):

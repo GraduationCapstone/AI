@@ -1,6 +1,8 @@
 import dspy
 
-
+"At the top of test.describe, set: test.setTimeout(60000); "
+"In each test's finally block, add a null check before screenshot: "
+"if (page && !page.isClosed()) { await page.screenshot({ path: 'test-results/screenshot_' + String(_idx).padStart(3,'0') + '.png', fullPage: true }); }"
 class TestPlanGenerationSignature(dspy.Signature):
     """
     You are a senior QA engineer.
@@ -8,7 +10,6 @@ class TestPlanGenerationSignature(dspy.Signature):
           for the given scenario in JSON format.
     The test plan must be based ONLY on what is actually implemented in the code context.
     """
-
     requirement = dspy.InputField(
         desc=(
             "The test scenario prompt from Spring server. "
@@ -59,9 +60,30 @@ class TestCodeGenerationSignature(dspy.Signature):
             "The test names MUST match case_name values from the test plan. "
             "OUTPUT ONLY VALID JAVASCRIPT CODE. "
             "DO NOT include any explanations, comments outside code, markdown, or reasoning text. "
-            "DO NOT write 'Wait,' or 'Let me' or any natural language before or after the code. "
-            "At the END of every test() block, before closing, add a screenshot with the test index as filename. "
-            "Use a counter variable at the top of test.describe: let _idx = 0; "
-            "and in each test: _idx++; await page.screenshot({ path: 'test-results/screenshot_' + String(_idx).padStart(3,'0') + '.png', fullPage: true });"
+
+            "IMPORTANT - Use these EXACT selectors for the login page: "
+            "Login email: '#login-email' "
+            "Login password: '#login-password' "
+            "Login button: '#btn-login' "
+            "Login error message: '#login-error' "
+            "Register link: '#go-register' "
+            "Register name: '#register-name' "
+            "Register email: '#register-email' "
+            "Register password: '#register-password' "
+            "Register confirm password: '#register-confirm' "
+            "Register button: '#btn-register' "
+            "Register error: '#register-error' "
+            "Register success: '#register-success' "
+            "Login link (from register): '#go-login' "
+            "Dashboard container: '#dashboard-container' "
+            "Logout button: '#btn-logout' "
+
+            "IMPORTANT - Every test() block MUST use try/finally to guarantee screenshot: "
+            "Set test.setTimeout(60000) at the top of test.describe. "
+            "Use a counter: let _idx = 0; at the top of test.describe. "
+            "In each test: _idx++; try { /* test logic */ } finally { "
+            "if (page && !page.isClosed()) { "
+            "await page.screenshot({ path: 'test-results/screenshot_' + String(_idx).padStart(3,'0') + '.png', fullPage: true }); "
+            "} }"
         )
     )
