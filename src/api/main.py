@@ -5,7 +5,7 @@ Spring Boot와 통신하는 AI 서버입니다.
 
 엔드포인트:
   POST /api/generate-plan  — 레포 분석 → 테스트 계획서(Excel) 생성 → S3 → 콜백
-  POST /api/generate-test  — 계획서 기반 테스트 코드 생성 → Playwright 실행 → 엑셀 결과 업데이트 → S3 → 콜백
+  POST /api/execute-test   — 계획서 기반 테스트 코드 생성 → Playwright 실행 → 엑셀 결과 업데이트 → S3 → 콜백
   GET  /api/result/{execution_id} — 생성 결과 조회
   GET  /api/health — 서버 상태
 """
@@ -25,12 +25,35 @@ import json
 import time
 import httpx
 import boto3
+import pickle
 from datetime import datetime
 
 from config.config import settings, validate_settings
 from src.dspy_modules import configure_bedrock_dspy, RAGPlaywrightGenerator
 from src.langchain_integration import CodeChunker
 from langchain_core.documents import Document
+
+
+STORE_PATH = "/home/ec2-user/AI/execution_store.pkl"
+
+def _load_store() -> dict:
+    if os.path.exists(STORE_PATH):
+        try:
+            with open(STORE_PATH, "rb") as f:
+                return pickle.load(f)
+        except Exception as e:
+            return {}
+    return {}
+
+def _save_store():
+    try:
+        with open(STORE_PATH, "wb") as f:
+            pickle.dump(execution_store, f)
+    except Exception as e:
+        logger.warning(f"Failed to save execution store: {e}")
+execution_store: dict = _load_store()
+
+
 
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper(), logging.INFO),
@@ -44,7 +67,6 @@ app = FastAPI(
     version="2.0.0"
 )
 
-execution_store: dict = {}
 
 app.add_middleware(
     CORSMiddleware,
@@ -56,39 +78,28 @@ app.add_middleware(
 
 
 # ── 모델 ─────────────────────────────────────────────────────────────────────
-
 class GeneratePlanRequest(BaseModel):
-    executionId: int
-    targetBranch: str = "main"
+    execution_id: int
+    scenario_serial: str = ""
+    scenario_attempt: str = ""
+    target_branch: str = "main"
     repository_url: Optional[HttpUrl] = "https://github.com/Danimo1/logintest"
     requirement: Optional[str] = "base_url: https://danimo1.github.io/logintest/\n\n이 레포 분석해서 로그인 시나리오 테스트 계획서 작성하고 playwright 테스트 코드 생성"
     auth_token: Optional[str] = "토큰값"
     callback_url: str = "http://10.0.1.243:8080/api/agent/callback/plan"
 
     @property
-    def execution_id(self) -> int:
-        return self.executionId
+    def branch(self) -> str:
+        return self.target_branch
 
     @property
-    def branch(self) -> str:
-        return self.targetBranch
+    def scenario_id(self) -> str:
+        return f"T{self.scenario_serial}{self.scenario_attempt}"
 
 
-class GenerateTestRequest(BaseModel):
-    executionId: int
-    targetBranch: str = "main"
-    repository_url: Optional[HttpUrl] = "https://github.com/Danimo1/logintest"
-    requirement: Optional[str] = "base_url: https://danimo1.github.io/logintest/\n\n이 레포 분석해서 로그인 시나리오 테스트 계획서 작성하고 playwright 테스트 코드 생성"
-    auth_token: Optional[str] = "토큰값"
+class ExecuteTestRequest(BaseModel):
+    execution_id: int
     callback_url: str = "http://10.0.1.243:8080/api/agent/callback/test"
-
-    @property
-    def execution_id(self) -> int:
-        return self.executionId
-
-    @property
-    def branch(self) -> str:
-        return self.targetBranch
 
 
 class ScenarioDetail(BaseModel):
@@ -492,7 +503,9 @@ async def startup_event():
 
 async def generate_plan_background(
     execution_id: int, repo_url: str, branch: str,
-    requirement: str, callback_url: str, auth_token: Optional[str] = None,
+    requirement: str, callback_url: str,
+    scenario_serial: str = "", scenario_attempt: str = "",
+    auth_token: Optional[str] = None,
 ):
     repo_path = None
     started_at = time.time()
@@ -513,12 +526,21 @@ async def generate_plan_background(
             s3_key = f"executions/{execution_id}/plan.xlsx"
             report_s3_url = await asyncio.to_thread(_upload_to_s3, plan_path, s3_key)
 
+        # execute-test에서 사용할 정보 저장
         execution_store[execution_id] = {
             "execution_id": execution_id,
-            "status": "COMPLETED",
+            "status": "PLAN_COMPLETED",
             "plan_path": plan_path,
             "plan_s3_url": report_s3_url,
+            "repo_url": repo_url,
+            "branch": branch,
+            "requirement": requirement,
+            "auth_token": auth_token,
+            "scenario_serial": scenario_serial,
+            "scenario_attempt": scenario_attempt,
         }
+
+        _save_store()
 
         await send_plan_callback(callback_url, PlanCallbackPayload(
             execution_id=execution_id,
@@ -536,13 +558,25 @@ async def generate_plan_background(
             shutil.rmtree(repo_path)
 
 
-async def generate_test_background(
-    execution_id: int, repo_url: str, branch: str,
-    requirement: str, callback_url: str, auth_token: Optional[str] = None,
+async def execute_test_background(
+    execution_id: int, callback_url: str,
 ):
-    repo_path = None
     started_at = time.time()
+    repo_path = None
     try:
+        # execution_store에서 plan 단계 정보 로드
+        store = execution_store.get(execution_id)
+        if not store:
+            raise ValueError(f"execution_id {execution_id}에 해당하는 plan이 없습니다. generate-plan을 먼저 실행하세요.")
+
+        repo_url = store.get("repo_url", "")
+        branch = store.get("branch", "main")
+        requirement = store.get("requirement", "")
+        auth_token = store.get("auth_token")
+        scenario_serial = store.get("scenario_serial", "")
+        scenario_attempt = store.get("scenario_attempt", "")
+        scenario_id = f"T{scenario_serial}{scenario_attempt}"
+
         logger.info(f"[{execution_id}] [TEST] Cloning repository...")
         repo_path, file_tree, chunked_docs = await _clone_and_chunk(repo_url, branch, auth_token, execution_id)
 
@@ -577,6 +611,8 @@ async def generate_test_background(
         # case_results 구성 + 스크린샷 S3 업로드
         case_results = []
         for i, r in enumerate(pw_results):
+            case_number = str(i + 1).zfill(2)
+            case_id = f"{scenario_id}_{case_number}"
             screenshot_s3_urls = []
             screenshot_path = os.path.join(
                 "/home/ec2-user/AI/test-results",
@@ -593,7 +629,7 @@ async def generate_test_background(
                     screenshot_s3_urls.append(url)
 
             case_results.append(TestCaseResult(
-                test_case_number=str(i + 1),
+                test_case_number=case_id,
                 case_name=r.get("case_name"),
                 status="PASS" if r.get("status") == "SUCCESS" else "FAIL",
                 error_log=r.get("error_log"),
@@ -604,14 +640,15 @@ async def generate_test_background(
         if any(r.status == "FAIL" for r in case_results):
             logger.warning(f"[{execution_id}] Some tests failed.")
 
-        execution_store[execution_id] = {
-            "execution_id": execution_id,
+        execution_store[execution_id].update({
             "status": overall_status,
             "test_code": result.get("test_code", ""),
             "plan_s3_url": report_s3_url,
             "spec_s3_url": spec_s3_url,
             "results": [r.model_dump() for r in case_results],
-        }
+        })
+
+        _save_store()
 
         duration_seconds = round(time.time() - started_at, 1)
         await send_test_callback(callback_url, TestCallbackPayload(
@@ -649,7 +686,7 @@ async def generate_test_background(
     summary="테스트 계획서 생성",
     description=(
         "GitHub 레포지토리를 분석하여 SIT 시나리오 형식의 테스트 계획서(Excel)를 생성합니다. "
-        "executionId에는 본인이 사용할 값을 넣어주시면 됩니다. 동일한 executionId로 generate-test를 호출하여 계획서 기반 테스트 코드 생성 및 실행이 가능합니다. "
+        "executionId에는 본인이 사용할 값을 넣어주시면 됩니다. 동일한 executionId로 execute-test를 호출하여 계획서 기반 테스트 코드 생성 및 실행이 가능합니다. "
         "완료 시 callback_url로 결과를 전송합니다."
     ),
     responses={422: {"model": None}},
@@ -657,18 +694,20 @@ async def generate_test_background(
 async def generate_plan(request: GeneratePlanRequest, background_tasks: BackgroundTasks) -> Response:
     background_tasks.add_task(
         generate_plan_background,
-        request.executionId,
+        request.execution_id,
         str(request.repository_url),
-        request.targetBranch,
+        request.target_branch,
         request.requirement,
         request.callback_url,
+        request.scenario_serial,
+        request.scenario_attempt,
         request.auth_token,
     )
     return Response(status_code=202)
 
 
 @app.post(
-    "/api/generate-test",
+    "/api/execute-test",
     status_code=202,
     summary="테스트 코드 생성 및 실행",
     description=(
@@ -678,15 +717,16 @@ async def generate_plan(request: GeneratePlanRequest, background_tasks: Backgrou
     ),
     responses={422: {"model": None}},
 )
-async def generate_test(request: GenerateTestRequest, background_tasks: BackgroundTasks) -> Response:
+async def execute_test(request: ExecuteTestRequest, background_tasks: BackgroundTasks) -> Response:
+    if request.execution_id not in execution_store:
+        raise HTTPException(
+            status_code=404,
+            detail=f"execution_id {request.execution_id}에 해당하는 plan이 없습니다. generate-plan을 먼저 실행하세요."
+        )
     background_tasks.add_task(
-        generate_test_background,
-        request.executionId,
-        str(request.repository_url),
-        request.targetBranch,
-        request.requirement,
+        execute_test_background,
+        request.execution_id,
         request.callback_url,
-        request.auth_token,
     )
     return Response(status_code=202)
 
