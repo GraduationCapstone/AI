@@ -1,19 +1,18 @@
-import dspy
-
-"At the top of test.describe, set: test.setTimeout(60000); "
-"In each test's finally block, add a null check before screenshot: "
-"if (page && !page.isClosed()) { await page.screenshot({ path: 'test-results/screenshot_' + String(_idx).padStart(3,'0') + '.png', fullPage: true }); }"
 class TestPlanGenerationSignature(dspy.Signature):
     """
     You are a senior QA engineer.
     Task: Analyze the provided repository code and generate a structured test plan
           for the given scenario in JSON format.
     The test plan must be based ONLY on what is actually implemented in the code context.
+    If 'server_url' is provided in the requirement, generate E2E test cases that cover
+    both frontend UI behavior and backend API integration scenarios.
     """
+
     requirement = dspy.InputField(
         desc=(
             "The test scenario prompt from Spring server. "
-            "Contains scenario name, description, serial number, attempt count, and guide."
+            "Contains scenario name, description, serial number, attempt count, and guide. "
+            "May contain 'base_url' for frontend and 'server_url' for backend API."
         )
     )
     code_context = dspy.InputField(
@@ -61,7 +60,15 @@ class TestCodeGenerationSignature(dspy.Signature):
             "OUTPUT ONLY VALID JAVASCRIPT CODE. "
             "DO NOT include any explanations, comments outside code, markdown, or reasoning text. "
 
-            "IMPORTANT - Use these EXACT selectors for the login page: "
+            "IMPORTANT - Extract URLs from requirement: "
+            "If 'base_url' is present, set: const BASE_URL = 'https://...'; "
+            "If 'server_url' is present, set: const SERVER_URL = 'https://...'; "
+            "ALL page.goto() calls MUST use absolute URLs: BASE_URL + '/path', never '/path' alone. "
+            "If both base_url and server_url are present, this is an E2E test. "
+            "In E2E mode, verify frontend UI interactions AND backend API responses together. "
+            "Use SERVER_URL for direct API calls via page.evaluate() or request context. "
+
+            "IMPORTANT - selector rules for login page: "
             "Login email: '#login-email' "
             "Login password: '#login-password' "
             "Login button: '#btn-login' "

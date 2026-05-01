@@ -221,7 +221,7 @@ async def _clone_and_chunk(repo_url: str, branch: str, auth_token: Optional[str]
 
 
 S3_BUCKET = "kiwi-test-artifacts-probe-2026"
-S3_REGION = "ap-northeast-1"
+S3_REGION = "us-east-1"
 
 
 def _upload_to_s3(local_path: str, s3_key: str) -> Optional[str]:
@@ -718,6 +718,10 @@ async def generate_plan(request: GeneratePlanRequest, background_tasks: Backgrou
     responses={422: {"model": None}},
 )
 async def execute_test(request: ExecuteTestRequest, background_tasks: BackgroundTasks) -> Response:
+    if request.execution_id not in execution_store:
+        fresh = _load_store()
+        execution_store.update(fresh)
+    
     if request.execution_id not in execution_store:
         raise HTTPException(
             status_code=404,

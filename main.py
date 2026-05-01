@@ -212,7 +212,7 @@ def main():
     if args.production:
         reload = False
         if workers == 1:
-            workers = 4  # 프로덕션은 기본 4 워커
+            workers = 1  # 프로덕션은 기본 4 워커
         logger.info("🏭 프로덕션 모드로 실행")
     else:
         reload = args.reload or True  # 개발 모드는 기본 자동 리로드
