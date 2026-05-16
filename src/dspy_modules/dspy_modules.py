@@ -1,55 +1,40 @@
-"""
-DSPy 설정 모듈
-
-AWS Bedrock 기반 DSPy 설정 함수를 제공합니다.
-"""
-
 import dspy
+import litellm
 from typing import Dict, Any
 from config.config import settings
 import logging
-
 logger = logging.getLogger(__name__)
 
+# response_format 강제 비활성화
+litellm.add_function_to_prompt = True
 
 def configure_bedrock_dspy(
     model=settings.bedrock_model,
     region=settings.aws_region,
     **kwargs
 ) -> None:
-    """
-    DSPy 설정 (AWS Bedrock 연동)
-    
-    애플리케이션 시작 시 한 번만 호출하면 됩니다.
-    
-    Args:
-        model: Claude 모델 ID
-        region: AWS 리전
-        **kwargs: BedrockClient에 전달할 추가 인자
-    
-    Example:
-        >>> from src.dspy_modules import configure_bedrock_dspy
-        >>> configure_bedrock_dspy(region="us-east-1")
-    """
     try:
+        import boto3
+        boto3.setup_default_session(region_name=region)
+
         lm = dspy.LM(
             f"bedrock/{settings.bedrock_model}",
-            temperature = 0.1,
-            max_tokens = 32000,)
-            
-        
-        # DSPy 설정
+            temperature=0.1,
+            max_tokens=16000,
+            cache=False,
+            aws_region_name=region,
+        )
+
         dspy.settings.configure(lm=lm)
-        
+
         logger.info(
             f"DSPy configured with Bedrock: "
             f"model={model}, region={region}"
         )
-        
-        # 연결 테스트
+
         test_lm = dspy.settings.lm
         logger.info(f"DSPy LM configured: {test_lm}")
-    
+
     except Exception as e:
         logger.error(f"Failed to configure DSPy with Bedrock: {e}")
         raise ConnectionError(
@@ -58,14 +43,7 @@ def configure_bedrock_dspy(
             f"you have access to Claude models in Bedrock."
         ) from e
 
-
 def get_current_lm_info() -> Dict[str, Any]:
-    """
-    현재 설정된 LM 정보 반환
-    
-    Returns:
-        Dict: LM 정보
-    """
     try:
         lm = dspy.settings.lm
         return {

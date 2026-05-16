@@ -199,6 +199,11 @@ class BedrockEmbeddings:
                 
                 if show_progress and (i + 1) % 10 == 0:
                     logger.info(f"Embedded {i + 1}/{total} texts")
+
+                # Throttling 방지: 매 10개마다 0.5초 딜레이
+                if (i + 1) % 10 == 0:
+                    import time
+                    time.sleep(0.5)
                     
             except Exception as e:
                 logger.warning(f"Failed to embed text {i}: {e}")

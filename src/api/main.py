@@ -12,7 +12,7 @@ Spring Boot와 통신하는 AI 서버입니다.
 
 from fastapi import FastAPI, BackgroundTasks, Response, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel
 from typing import Optional, List, Dict
 import asyncio
 import logging
@@ -53,8 +53,8 @@ def _save_store():
             pickle.dump(execution_store, f)
     except Exception as e:
         logger.warning(f"Failed to save execution store: {e}")
-execution_store: dict = _load_store()
 
+execution_store: dict = _load_store()
 
 
 logging.basicConfig(
@@ -69,7 +69,6 @@ app = FastAPI(
     version="2.0.0"
 )
 
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -80,17 +79,18 @@ app.add_middleware(
 
 
 # ── 모델 ─────────────────────────────────────────────────────────────────────
+
 class GeneratePlanRequest(BaseModel):
     execution_id: int
     scenario_serial: str = ""
     scenario_attempt: str = ""
     target_branch: str = "main"
-    repository_url: Optional[HttpUrl] = "https://github.com/Danimo1/logintest"
-    base_url: Optional[HttpUrl] = "https://danimo1.github.io/logintest/"
-    requirements: Optional[List[str]] = ["로그인 시나리오 테스트 계획서 작성", "회원가입 시나리오 테스트 계획서 작성"]
+    repository_url: Optional[str] = None
+    base_url: Optional[str] = None
+    requirements: Optional[List[str]] = None
     server_url: Optional[str] = None
     auth_token: Optional[str] = None
-    callback_url: str = "http://10.0.1.243:8080/api/agent/callback/plan"
+    callback_url: str = ""
 
     @property
     def branch(self) -> str:
@@ -104,7 +104,7 @@ class GeneratePlanRequest(BaseModel):
 class ExecuteTestRequest(BaseModel):
     execution_id: int
     plan_index: int = 0
-    callback_url: str = "http://10.0.1.243:8080/api/agent/callback/test"
+    callback_url: str = ""
 
 
 class ScenarioDetail(BaseModel):
@@ -132,7 +132,7 @@ class TestCaseResult(BaseModel):
 
 class PlanCallbackPayload(BaseModel):
     execution_id: int
-    plan_s3_urls: Optional[List[str]] = None
+    plan_s3_url: Optional[str] = None  # 콤마 구분 string
 
 
 class TestCallbackPayload(BaseModel):
@@ -283,7 +283,7 @@ async def send_test_callback(callback_url: str, payload: TestCallbackPayload) ->
 
 # ── PLAN 전용 함수 ────────────────────────────────────────────────────────────
 
-def _run_plan_pipeline(chunked_docs, file_tree: str, requirement: str, execution_id: int) -> dict:
+def _run_plan_pipeline(chunked_docs, file_tree: str, requirement: str, execution_id: int, plan_index: int = 0, scenario_serial: str = "00", scenario_attempt: str = "01") -> dict:
     from src.dspy_modules.rag_generator import RAGPlaywrightGenerator as Gen
     generator = Gen(region=settings.aws_region)
     generator.index_documents(chunked_docs, file_tree=file_tree)
@@ -291,24 +291,21 @@ def _run_plan_pipeline(chunked_docs, file_tree: str, requirement: str, execution
         requirement=requirement,
         top_k=settings.rag_top_k,
         execution_id=execution_id,
+        plan_index=plan_index,
     )
 
 
 # ── TEST 전용 함수 ────────────────────────────────────────────────────────────
 
-def _run_test_pipeline(chunked_docs, file_tree: str, requirement: str, execution_id: int) -> dict:
+def _run_test_pipeline(chunked_docs, file_tree: str, requirement: str, execution_id: int, plan_path: Optional[str] = None) -> dict:
     from src.dspy_modules.rag_generator import RAGPlaywrightGenerator as Gen
     generator = Gen(region=settings.aws_region)
     generator.index_documents(chunked_docs, file_tree=file_tree)
-
-    today = datetime.now().strftime("%Y%m%d")
-    plan_path = os.path.join(OUTPUT_DIR, f"{today}_{execution_id}_plan.xlsx")
-
-    return generator.generate_test(
+    return generator.generate_code_only(
         requirement=requirement,
         top_k=settings.rag_top_k,
         execution_id=execution_id,
-        plan_path=plan_path if os.path.exists(plan_path) else None,
+        plan_path=plan_path,
     )
 
 
@@ -515,12 +512,45 @@ async def generate_plan_background(
     base_url: Optional[str] = None,
 ):
     repo_path = None
+    SCENARIO_MAP = {
+        "01": "회원가입 시나리오 테스트 계획서 작성",
+        "02": "로그인 시나리오 테스트 계획서 작성",
+        "03": "비밀번호 찾기 시나리오 테스트 계획서 작성",
+        "04": "로그아웃 시나리오 테스트 계획서 작성",
+        "05": "프로필 수정 시나리오 테스트 계획서 작성",
+        "06": "비밀번호 변경 시나리오 테스트 계획서 작성",
+        "07": "권한 기반 접근 제어 시나리오 테스트 계획서 작성",
+        "08": "세션 만료/토큰 만료 시나리오 테스트 계획서 작성",
+        "09": "게시글 작성 시나리오 테스트 계획서 작성",
+        "10": "게시글 수정/삭제 시나리오 테스트 계획서 작성",
+        "11": "댓글 작성/수정/삭제 시나리오 테스트 계획서 작성",
+        "12": "좋아요/즐겨찾기 시나리오 테스트 계획서 작성",
+        "13": "검색 시나리오 테스트 계획서 작성",
+        "14": "필터/정렬 시나리오 테스트 계획서 작성",
+        "15": "반응형 레이아웃 시나리오 테스트 계획서 작성",
+        "16": "브라우저 호환성 시나리오 테스트 계획서 작성",
+        "17": "404/500 에러 페이지 동작 시나리오 테스트 계획서 작성",
+        "18": "네트워크 끊김 상태 시나리오 테스트 계획서 작성",
+        "19": "서버 응답 지연 시나리오 테스트 계획서 작성",
+        "20": "API 에러 응답 처리 시나리오 테스트 계획서 작성",
+        "21": "A/B 테스트 요소 확인 시나리오 테스트 계획서 작성",
+        "22": "입력값 유효성 검사 시나리오 테스트 계획서 작성",
+        "23": "다국어 지원 언어 변경 시나리오 테스트 계획서 작성",
+        "24": "파일 업로드/다운로드 시나리오 테스트 계획서 작성",
+        "25": "푸시 알림 시나리오 테스트 계획서 작성",
+        "26": "다중 사용자 동시 접속 시나리오 테스트 계획서 작성",
+    }
+
     started_at = time.time()
     try:
-        # 각 requirement에 base_url, server_url 통합
+        if not requirements:
+            requirements = ["02"]
+
         full_requirements = []
-        for req in requirements[:2]:
-            full_req = req or ""
+        for req in requirements:
+            req_str = str(req).strip()
+            resolved = SCENARIO_MAP.get(req_str, req_str)
+            full_req = resolved
             if base_url and "base_url" not in full_req:
                 full_req = f"base_url: {base_url}\n\n{full_req}"
             if server_url and "server_url" not in full_req:
@@ -532,10 +562,9 @@ async def generate_plan_background(
 
         logger.info(f"[{execution_id}] [PLAN] Generating {len(full_requirements)} plans in parallel...")
 
-        # 병렬 처리
         tasks = [
-            asyncio.to_thread(_run_plan_pipeline, chunked_docs, file_tree, req, execution_id)
-            for req in full_requirements
+            asyncio.to_thread(_run_plan_pipeline, chunked_docs, file_tree, req, execution_id, i, scenario_serial or "00", scenario_attempt or "01")
+            for i, req in enumerate(full_requirements)
         ]
         results = await asyncio.gather(*tasks)
 
@@ -548,20 +577,11 @@ async def generate_plan_background(
                 plan_paths.append(None)
                 plan_s3_urls.append(None)
                 continue
-
             plan_path = result.get("saved_plan", "")
-
-            # 파일명 변경: plan_1.xlsx, plan_2.xlsx
-            if plan_path and os.path.exists(plan_path):
-                new_plan_path = plan_path.replace("_plan.xlsx", f"_plan_{i+1}.xlsx")
-                os.rename(plan_path, new_plan_path)
-                plan_path = new_plan_path
-
             s3_url = None
             if plan_path and os.path.exists(plan_path):
                 s3_key = f"executions/{execution_id}/plan_{i+1}.xlsx"
                 s3_url = await asyncio.to_thread(_upload_to_s3, plan_path, s3_key)
-
             plan_paths.append(plan_path)
             plan_s3_urls.append(s3_url)
 
@@ -580,16 +600,17 @@ async def generate_plan_background(
         }
         _save_store()
 
+        urls_str = ",".join(url for url in plan_s3_urls if url)
         await send_plan_callback(callback_url, PlanCallbackPayload(
             execution_id=execution_id,
-            plan_s3_urls=plan_s3_urls,
+            plan_s3_url=urls_str if urls_str else None,
         ))
 
     except Exception as e:
         logger.error(f"[{execution_id}] [PLAN] Job failed: {e}", exc_info=True)
         await send_plan_callback(callback_url, PlanCallbackPayload(
             execution_id=execution_id,
-            plan_s3_urls=None,
+            plan_s3_url=None,
         ))
     finally:
         if repo_path and os.path.exists(repo_path):
@@ -615,10 +636,8 @@ async def execute_test_background(
         scenario_attempt = store.get("scenario_attempt", "")
         scenario_id = f"T{scenario_serial}{scenario_attempt}"
 
-        # plan_index로 해당 시나리오 requirement 선택
         requirement = requirements[plan_index] if plan_index < len(requirements) else requirements[0]
 
-        # server_url을 requirement에 추가
         if server_url and "server_url" not in requirement:
             requirement = f"{requirement}\nserver_url: {server_url}"
 
@@ -627,10 +646,21 @@ async def execute_test_background(
 
         logger.info(f"[{execution_id}] [TEST] Generating test code...")
 
-        # plan_index에 맞는 plan 파일 경로
         plan_paths = store.get("plan_paths", [store.get("plan_path")])
         plan_path_for_index = plan_paths[plan_index] if plan_index < len(plan_paths) else plan_paths[0]
 
+        if not plan_path_for_index or not os.path.exists(plan_path_for_index):
+            from datetime import datetime as dt
+            today = dt.now().strftime("%Y%m%d")
+            fallback = os.path.join(OUTPUT_DIR, f"{today}_{execution_id}_plan_{plan_index+1}.xlsx")
+            if os.path.exists(fallback):
+                plan_path_for_index = fallback
+                logger.info(f"[{execution_id}] Using fallback plan path: {fallback}")
+
+        if not plan_path_for_index or not os.path.exists(plan_path_for_index):
+            raise ValueError(f"계획서 파일을 찾을 수 없습니다. generate-plan을 먼저 실행하세요. (path={plan_path_for_index})")
+
+        logger.info(f"[{execution_id}] plan_path_for_index={plan_path_for_index}, exists={os.path.exists(plan_path_for_index)}")
         result = await asyncio.to_thread(_run_test_pipeline, chunked_docs, file_tree, requirement, execution_id, plan_path_for_index)
 
         if not (isinstance(result, dict) and result.get("status") == "success"):
@@ -723,6 +753,7 @@ async def execute_test_background(
         if repo_path and os.path.exists(repo_path):
             shutil.rmtree(repo_path)
 
+
 # ── 엔드포인트 ───────────────────────────────────────────────────────────────
 
 @app.post(
@@ -768,7 +799,7 @@ async def execute_test(request: ExecuteTestRequest, background_tasks: Background
     if request.execution_id not in execution_store:
         fresh = _load_store()
         execution_store.update(fresh)
-    
+
     if request.execution_id not in execution_store:
         raise HTTPException(
             status_code=404,

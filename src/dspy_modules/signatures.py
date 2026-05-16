@@ -21,12 +21,22 @@ class TestPlanGenerationSignature(dspy.Signature):
     reasoning = dspy.OutputField(
         desc="Step-by-step analysis: which components, selectors (id, class, placeholder) were found in the code."
     )
+    scenario_serial = dspy.InputField(
+        desc="2-digit scenario serial number provided by backend (e.g. '02' for login). Use this to construct IDs."
+    )
+    scenario_attempt = dspy.InputField(
+        desc="2-digit attempt number provided by backend (e.g. '01'). Use this to construct IDs."
+    )
     test_plan = dspy.OutputField(
         desc=(
             "A raw JSON array of test cases. Each object must have exactly these keys: "
             "no (integer), scenario_id (string), scenario_name (string), description (string), "
             "case_id (string), case_name (string), precondition (string), test_data (string), "
             "steps (string), expected_result (string). "
+            "CRITICAL ID FORMAT RULES: "
+            "- scenario_id MUST be: T{scenario_serial}{scenario_attempt} (e.g. T0201 if serial=02, attempt=01). "
+            "- case_id MUST be: T{scenario_serial}{scenario_attempt}_{nn} where nn is 2-digit sequential number (e.g. T0201_01, T0201_02). "
+            "- All test cases in the same scenario share the same scenario_id. "
             "Output ONLY the JSON array. No markdown, no backticks, no extra text."
         )
     )
