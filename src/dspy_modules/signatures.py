@@ -7,10 +7,9 @@ class TestPlanGenerationSignature(dspy.Signature):
     Rules:
     - Base ONLY on components, routes, and functions that actually exist in the code_context.
     - Focus ONLY on the scenario described in requirement. Do NOT overlap with other scenarios.
+    - At least 7 test cases generated.
+    - Only use loiginId :danimo1 and password:1234 for login test cases, unless requirement specifies otherwise.
     - If base_url is provided in requirement, use it as the target URL for test cases.
-    - NEVER use test id. Default loginid is 'danimo1'. Use this for all login tests unless specified otherwise.
-    - NEVER use test password. Default password is '1234'. Use this for all login tests unless specified otherwise
-    - Generate AT MOST 7 test cases.
     - If server_url is provided in requirement, include E2E test cases that verify both frontend UI and backend API responses.
     - Output ONLY a raw JSON array. No markdown, no backticks, no explanation.
     """
@@ -58,8 +57,6 @@ class TestCodeGenerationSignature(dspy.Signature):
     - ALL page.goto() calls MUST use absolute URLs. Never use relative paths like '/path'.
     - Every test() block MUST use try/finally to guarantee screenshot.
     - NEVER use page.waitForLoadState('networkidle'). Always use page.waitForLoadState('domcontentloaded') instead to avoid timeout issues.
-    - NEVER use test id. Default loginid is 'danimo1'. Use this for all login tests unless specified otherwise.
-    - NEVER use test password. Default password is '1234'. Use this for all login tests unless specified otherwise.
     - If the scenario requires login, ALWAYS perform login at the start of each test that needs authentication. Use selectors found in code_context.
     - Default test account credentials: loginId='danimo1', password='1234'. Use these unless the requirement specifies otherwise.
     - In loginUser function, ALWAYS add { timeout: 5000 } to all expect assertions to avoid long waits: await expect(page).not.toHaveURL('/login', { timeout: 5000 }).
@@ -68,6 +65,7 @@ class TestCodeGenerationSignature(dspy.Signature):
     - NEVER use expect(pageContent).toBeTruthy() or expect(bodyVisible).toBeTruthy() as the only assertion. Always verify specific UI elements, URLs, or data.
     - After login, ALWAYS verify success by checking the URL does not contain '/login' or by checking a specific authenticated element.
     - After clicking login button, use await page.waitForURL('**/home', { timeout: 10000 }).catch(() => {}) before checking URL to allow redirect to complete.
+    - For login page navigation, ALWAYS use BASE_URL + '/' (root URL), NOT BASE_URL + '/login', unless code_context confirms /login route exists. StudyMate login form is on the root page.
     - After filter/sort actions, verify the result by checking element count changes, specific text content, or absence of error pages.
     - After form submission, verify success by checking for success messages, URL changes, or updated data in the DOM.
     - For error cases, verify specific error messages appear using expect(element).toBeVisible() or expect(text).toContain('...').
@@ -87,14 +85,17 @@ class TestCodeGenerationSignature(dspy.Signature):
             "Complete Playwright JavaScript (CommonJS) test code. Strict rules:\n"
             "1. First line MUST be: const { test, expect } = require('@playwright/test');\n"
             "2. NEVER use TypeScript: no import statements, no type annotations (page: Page), no interfaces.\n"
-            "3. Set test.setTimeout(60000) at the top of each test.describe block.\n"
+            "3. Set test.setTimeout(30000) at the top of each test.describe block.\n"
             "4. Use a counter: let _idx = 0; inside test.describe. Increment in each test: _idx++;\n"
             "5. Every test() block MUST have try/finally:\n"
-            "   try { /* test logic */ } finally {\n"
-            "     if (page && !page.isClosed()) {\n"
-            "       await page.screenshot({ path: 'test-results/screenshot_' + String(_idx).padStart(3,'0') + '.png', fullPage: true });\n"
-            "     }\n"
+            "   try { /* test logic */ } catch (e) { throw e; } finally {\n"
+            "     try {\n"
+            "       if (page && !page.isClosed()) {\n"
+            "         await page.screenshot({ path: 'test-results/screenshot_' + String(_idx).padStart(3,'0') + '.png', fullPage: true });\n"
+            "       }\n"
+            "     } catch (screenshotError) {}\n"
             "   }\n"
+            "   Even if the test throws an error, the screenshot MUST always be taken in the finally block.\n"
             "6. Use only selectors found in code_context: #id, [name='x'], [placeholder='x'], text='x'.\n"
             "7. Never use Styled-components random class names (e.g. .sc-abc).\n"
             "8. NEVER use expect(pageContent).toBeTruthy() or expect(body).isVisible() as the only assertion.\n"

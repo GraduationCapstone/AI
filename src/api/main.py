@@ -99,6 +99,7 @@ class GeneratePlanRequest(BaseModel):
     server_url: Optional[str] = None
     auth_token: Optional[str] = None
     callback_url: str = ""
+    group_name: Optional[str] = None  # 테스트명 (파일명 및 테스터 컬럼에 사용)
 
     @property
     def branch(self) -> str:
@@ -358,6 +359,33 @@ def _run_test_pipeline(chunked_docs, file_tree: str, requirement: str, execution
     )
 
 
+def _parse_test_cases_from_spec(spec_path: str) -> Dict[str, str]:
+    """spec.js 파일에서 케이스ID별 테스트 코드 파싱"""
+    result = {}
+    if not spec_path or not os.path.exists(spec_path):
+        return result
+    try:
+        with open(spec_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        # test('T0201_01 - ...', async ({ page }) => { ... }); 패턴 파싱
+        pattern = re.compile(
+            r"test\((['\"])([^'\"]+)\1,\s*async\s*\([^)]*\)\s*=>\s*\{" ,
+            re.MULTILINE
+        )
+        matches = list(pattern.finditer(content))
+        for idx, match in enumerate(matches):
+            case_title = match.group(1).strip()
+            # 케이스 ID 추출 (T0201_01 형식)
+            id_match = re.match(r"(T\d{4}_\d{2})", case_title)
+            case_id = id_match.group(1) if id_match else case_title
+            start = match.start()
+            end = matches[idx + 1].start() if idx + 1 < len(matches) else len(content)
+            result[case_id] = content[start:end].strip()
+    except Exception as e:
+        logger.warning(f"Failed to parse test cases from spec: {e}")
+    return result
+
+
 def _run_playwright(spec_path: str, execution_id: int) -> List[Dict]:
     result_dir = tempfile.mkdtemp()
     json_report_path = os.path.join(result_dir, "report.json")
@@ -477,7 +505,7 @@ def _parse_playwright_text(output: str, execution_id: int) -> List[Dict]:
     return results
 
 
-def _update_excel_with_results(plan_path: str, pw_results: List[Dict]) -> None:
+def _update_excel_with_results(plan_path: str, pw_results: List[Dict], tester_name: str = "user") -> None:
     try:
         import openpyxl
         from openpyxl.drawing.image import Image as XLImage
@@ -513,7 +541,7 @@ def _update_excel_with_results(plan_path: str, pw_results: List[Dict]) -> None:
             cell_l.alignment = center
 
             ws.cell(row=row, column=13, value=today).alignment = center
-            ws.cell(row=row, column=14, value="user").alignment = center
+            ws.cell(row=row, column=14, value=tester_name).alignment = center
 
             screenshot_path = os.path.join(
                 "/home/ec2-user/AI/test-results",
@@ -562,6 +590,7 @@ async def generate_plan_background(
     auth_token: Optional[str] = None,
     server_url: Optional[str] = None,
     base_url: Optional[str] = None,
+    group_name: Optional[str] = None,
 ):
     SCENARIO_MAP = {
         "01": "회원가입 시나리오 테스트 계획서 작성",
@@ -629,7 +658,8 @@ async def generate_plan_background(
             plan_path = result.get("saved_plan", "")
             if plan_path and os.path.exists(plan_path):
                 plan_date = datetime.now().strftime("%Y%m%d")
-                plan_filename = _get_scenario_filename(scenario_serial or "00", "계획서", plan_date)
+                plan_prefix = group_name if group_name else SCENARIO_NAME_MAP.get(scenario_serial or "00", f"시나리오{scenario_serial}")
+                plan_filename = f"{plan_prefix}_계획서_{plan_date}.xlsx"
                 s3_key = f"executions/{execution_id}/{plan_filename}"
                 s3_url = await asyncio.to_thread(_upload_to_s3, plan_path, s3_key)
 
@@ -645,6 +675,7 @@ async def generate_plan_background(
             "scenario_serial": scenario_serial,
             "scenario_attempt": scenario_attempt,
             "server_url": server_url,
+            "group_name": group_name or "",
         }
         _save_store()
 
@@ -720,13 +751,15 @@ async def execute_test_background(
         logger.info(f"[{execution_id}] [TEST] Playwright done: {len(pw_results)} results")
 
         if plan_path and os.path.exists(plan_path):
-            await asyncio.to_thread(_update_excel_with_results, plan_path, pw_results)
+            await asyncio.to_thread(_update_excel_with_results, plan_path, pw_results, store.get("group_name", "user"))
 
         report_s3_url = None
         if plan_path and os.path.exists(plan_path):
             result_date = datetime.now().strftime("%Y%m%d")
             result_serial = store.get("scenario_serial", "00")
-            result_filename = _get_scenario_filename(result_serial, "결과보고서", result_date)
+            stored_group_name = store.get("group_name", "")
+            result_prefix = stored_group_name if stored_group_name else SCENARIO_NAME_MAP.get(result_serial, f"시나리오{result_serial}")
+            result_filename = f"{result_prefix}_결과보고서_{result_date}.xlsx"
             s3_key = f"executions/{execution_id}/{result_filename}"
             report_s3_url = await asyncio.to_thread(_upload_to_s3, plan_path, s3_key)
 
@@ -736,6 +769,10 @@ async def execute_test_background(
             spec_s3_url = await asyncio.to_thread(_upload_to_s3, spec_path, s3_key)
 
         test_cases = result.get("test_cases", [])
+
+        # spec 파일에서 케이스별 코드 파싱
+        spec_code_map = _parse_test_cases_from_spec(spec_path)
+        spec_filename = os.path.basename(spec_path) if spec_path else ""
 
         case_results = []
         for i, r in enumerate(pw_results):
@@ -781,12 +818,15 @@ async def execute_test_background(
                 result=status_text,
             )
 
+            case_test_code = spec_code_map.get(parsed_number)
             case_results.append(TestCaseResult(
                 test_case_number=parsed_number,
                 case_name=parsed_name,
+                test_code_name=spec_filename,
                 status="PASS" if r.get("status") == "SUCCESS" else "FAIL",
                 duration_seconds=r.get("duration_seconds"),
                 error_log=r.get("error_log"),
+                test_code=case_test_code,
                 screenshot_s3_urls=screenshot_s3_urls,
                 scenario_detail=scenario_detail,
             ))
@@ -805,20 +845,33 @@ async def execute_test_background(
 
         total_duration = round(time.time() - started_at, 1)
 
-        # 케이스별 개별 콜백 전송 (마지막 케이스만 COMPLETED, 나머지는 TESTING)
-        for i, case_result in enumerate(case_results):
-            is_last = (i == len(case_results) - 1)
-            logger.info(f"[{execution_id}] Sending callback: case={case_result.test_case_number}, status={case_result.status}, is_last={is_last}")
-            await send_test_callback(callback_url, TestCallbackPayload(
-                execution_id=execution_id,
-                status="COMPLETED",
-                duration_seconds=case_result.duration_seconds,
-                plan_result_s3_url=report_s3_url if is_last else None,
-                test_spec_s3_url=spec_s3_url if is_last else None,
-                results=[case_result],
-            ))
+        # 전체 결과 한 번에 콜백 전송 (results를 JSON string으로)
+        payload = TestCallbackPayload(
+            execution_id=execution_id,
+            status="COMPLETED",
+            duration_seconds=total_duration,
+            plan_result_s3_url=report_s3_url,
+            test_spec_s3_url=spec_s3_url,
+            results=case_results,
+        )
+        payload_dict = payload.model_dump()
+        # test_code 길이만 로그에 찍기 (너무 길어서 전체 출력 불가)
+        for r in payload_dict.get("results", []):
+            if r.get("test_code"):
+                r["test_code_len"] = len(r["test_code"])
+                r["test_code"] = r["test_code"][:100] + "..."
+        logger.info(f"[{execution_id}] Payload preview: {json.dumps(payload_dict, ensure_ascii=False)[:500]}")
 
-        logger.info(f"[{execution_id}] Sent {len(case_results)} individual callbacks")
+        logger.info(f"[{execution_id}] Sending unified callback. Total cases: {len(case_results)}")
+        await send_test_callback(callback_url, TestCallbackPayload(
+            execution_id=execution_id,
+            status="COMPLETED",
+            duration_seconds=total_duration,
+            plan_result_s3_url=report_s3_url,
+            test_spec_s3_url=spec_s3_url,
+            results=case_results,
+        ))
+        logger.info(f"[{execution_id}] Unified callback sent successfully.")
 
     except Exception as e:
         logger.error(f"[{execution_id}] [TEST] Job failed: {e}", exc_info=True)
@@ -858,6 +911,7 @@ async def generate_plan(request: GeneratePlanRequest, background_tasks: Backgrou
         request.auth_token,
         request.server_url,
         str(request.base_url) if request.base_url else None,
+        request.group_name,
     )
     return Response(status_code=202)
 
