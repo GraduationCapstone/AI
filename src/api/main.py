@@ -81,13 +81,21 @@ app.add_middleware(
 # ── 모델 ─────────────────────────────────────────────────────────────────────
 
 class GeneratePlanRequest(BaseModel):
+    model_config = {
+        "populate_by_name": True,
+        "alias_generator": lambda string: "".join(
+            word.capitalize() if i else word
+            for i, word in enumerate(string.split("_"))
+        )
+    }
+
     execution_id: int
     scenario_serial: str = ""
     scenario_attempt: str = ""
     target_branch: str = "main"
     repository_url: Optional[str] = None
     base_url: Optional[str] = None
-    requirements: Optional[List[str]] = None
+    requirements: Optional[str] = None  # 단일 시나리오 번호 str
     server_url: Optional[str] = None
     auth_token: Optional[str] = None
     callback_url: str = ""
@@ -102,8 +110,15 @@ class GeneratePlanRequest(BaseModel):
 
 
 class ExecuteTestRequest(BaseModel):
+    model_config = {
+        "populate_by_name": True,
+        "alias_generator": lambda string: "".join(
+            word.capitalize() if i else word
+            for i, word in enumerate(string.split("_"))
+        )
+    }
+
     execution_id: int
-    plan_index: int = 0
     callback_url: str = ""
 
 
@@ -132,7 +147,7 @@ class TestCaseResult(BaseModel):
 
 class PlanCallbackPayload(BaseModel):
     execution_id: int
-    plan_s3_url: Optional[str] = None  # 콤마 구분 string
+    plan_s3_url: Optional[str] = None
 
 
 class TestCallbackPayload(BaseModel):
@@ -152,6 +167,21 @@ EXCLUDE_DIRS = {
 }
 
 OUTPUT_DIR = "/home/ec2-user/AI/output_codes"
+
+SCENARIO_NAME_MAP = {
+    "01": "회원가입", "02": "로그인", "03": "비밀번호찾기", "04": "로그아웃",
+    "05": "프로필수정", "06": "비밀번호변경", "07": "권한기반접근제어", "08": "세션만료",
+    "09": "게시글작성", "10": "게시글수정삭제", "11": "댓글작성수정삭제", "12": "좋아요즐겨찾기",
+    "13": "검색", "14": "필터정렬", "15": "반응형레이아웃", "16": "브라우저호환성",
+    "17": "에러페이지동작", "18": "네트워크끊김", "19": "서버응답지연", "20": "API에러처리",
+    "21": "AB테스트", "22": "입력값유효성검사", "23": "다국어지원", "24": "파일업로드다운로드",
+    "25": "푸시알림", "26": "다중사용자동시접속",
+}
+
+def _get_scenario_filename(scenario_serial: str, file_type: str, date_str: str) -> str:
+    """시나리오명 기반 파일명 생성"""
+    name = SCENARIO_NAME_MAP.get(scenario_serial, f"시나리오{scenario_serial}")
+    return f"{name}_{file_type}_{date_str}.xlsx"
 
 
 def _clone_sync(repo_url: str, branch: str, token: Optional[str]) -> str:
@@ -241,6 +271,22 @@ def _upload_to_s3(local_path: str, s3_key: str) -> Optional[str]:
         return None
 
 
+def _create_white_png() -> bytes:
+    """1x1 흰색 PNG 이미지 생성 (스크린샷 없을 때 대체용)"""
+    import struct, zlib
+    def make_png(w, h):
+        def chunk(name, data):
+            c = zlib.crc32(name + data) & 0xffffffff
+            return struct.pack('>I', len(data)) + name + data + struct.pack('>I', c)
+        raw = b'\x00' + b'\xff' * (w * 3)
+        idat = zlib.compress(raw * h)
+        return (b'\x89PNG\r\n\x1a\n'
+                + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0))
+                + chunk(b'IDAT', idat)
+                + chunk(b'IEND', b''))
+    return make_png(1, 1)
+
+
 def _upload_bytes_to_s3(data: bytes, s3_key: str, content_type: str) -> Optional[str]:
     try:
         s3 = boto3.client("s3", region_name=S3_REGION)
@@ -283,21 +329,23 @@ async def send_test_callback(callback_url: str, payload: TestCallbackPayload) ->
 
 # ── PLAN 전용 함수 ────────────────────────────────────────────────────────────
 
-def _run_plan_pipeline(chunked_docs, file_tree: str, requirement: str, execution_id: int, plan_index: int = 0, scenario_serial: str = "00", scenario_attempt: str = "01") -> dict:
+def _run_plan_pipeline(requirement: str, execution_id: int, plan_index: int = 0, scenario_serial: str = "00", scenario_attempt: str = "01") -> dict:
+    """STEP 1: 인덱싱 없이 시나리오명만으로 계획서 생성"""
     from src.dspy_modules.rag_generator import RAGPlaywrightGenerator as Gen
     generator = Gen(region=settings.aws_region)
-    generator.index_documents(chunked_docs, file_tree=file_tree)
     return generator.generate_plan_only(
         requirement=requirement,
         top_k=settings.rag_top_k,
         execution_id=execution_id,
         plan_index=plan_index,
+        scenario_serial=scenario_serial,
+        scenario_attempt=scenario_attempt,
     )
 
 
 # ── TEST 전용 함수 ────────────────────────────────────────────────────────────
 
-def _run_test_pipeline(chunked_docs, file_tree: str, requirement: str, execution_id: int, plan_path: Optional[str] = None) -> dict:
+def _run_test_pipeline(chunked_docs, file_tree: str, requirement: str, execution_id: int, plan_path: Optional[str] = None, scenario_serial: str = "") -> dict:
     from src.dspy_modules.rag_generator import RAGPlaywrightGenerator as Gen
     generator = Gen(region=settings.aws_region)
     generator.index_documents(chunked_docs, file_tree=file_tree)
@@ -306,6 +354,7 @@ def _run_test_pipeline(chunked_docs, file_tree: str, requirement: str, execution
         top_k=settings.rag_top_k,
         execution_id=execution_id,
         plan_path=plan_path,
+        scenario_serial=scenario_serial,
     )
 
 
@@ -325,7 +374,7 @@ def _run_playwright(spec_path: str, execution_id: int) -> List[Dict]:
         ]
         proc = subprocess.run(
             cmd,
-            timeout=300,
+            timeout=600,
             cwd="/home/ec2-user/AI",
             env=env,
             capture_output=True,
@@ -385,8 +434,10 @@ def _parse_playwright_json(report: dict) -> List[Dict]:
             case_name = spec.get("title", "Unknown")
             ok = spec.get("ok", False)
             error_log = None
+            duration_ms = 0
             for test in spec.get("tests", []):
                 for result in test.get("results", []):
+                    duration_ms += result.get("duration", 0)
                     if not ok and not error_log:
                         for err in result.get("errors", []):
                             msg = err.get("message", "")
@@ -396,6 +447,7 @@ def _parse_playwright_json(report: dict) -> List[Dict]:
                 "case_name": case_name,
                 "status": "SUCCESS" if ok else "FAIL",
                 "error_log": error_log,
+                "duration_seconds": round(duration_ms / 1000, 1),
                 "screenshot_path": None,
             })
         for sub in suite.get("suites", []):
@@ -505,13 +557,12 @@ async def startup_event():
 
 async def generate_plan_background(
     execution_id: int, repo_url: str, branch: str,
-    requirements: List[str], callback_url: str,
+    requirements: str, callback_url: str,
     scenario_serial: str = "", scenario_attempt: str = "",
     auth_token: Optional[str] = None,
     server_url: Optional[str] = None,
     base_url: Optional[str] = None,
 ):
-    repo_path = None
     SCENARIO_MAP = {
         "01": "회원가입 시나리오 테스트 계획서 작성",
         "02": "로그인 시나리오 테스트 계획서 작성",
@@ -543,56 +594,53 @@ async def generate_plan_background(
 
     started_at = time.time()
     try:
+
+
+        # requirements가 없으면 scenario_serial로 대체, 둘 다 없으면 에러
         if not requirements:
-            requirements = ["02"]
+            if not scenario_serial:
+                raise ValueError("requirements와 scenario_serial 둘 다 없습니다. 요청을 확인하세요.")
+            requirements = scenario_serial
+            logger.info(f"[{execution_id}] [PLAN] requirements 미수신 → scenario_serial({scenario_serial})로 대체: {requirements}")
 
-        full_requirements = []
-        for req in requirements:
-            req_str = str(req).strip()
-            resolved = SCENARIO_MAP.get(req_str, req_str)
-            full_req = resolved
-            if base_url and "base_url" not in full_req:
-                full_req = f"base_url: {base_url}\n\n{full_req}"
-            if server_url and "server_url" not in full_req:
-                full_req = f"{full_req}\nserver_url: {server_url}"
-            full_requirements.append(full_req)
+        # 번호 → 시나리오명 변환
+        req_str = str(requirements).strip()
+        resolved = SCENARIO_MAP.get(req_str, req_str)
+        full_req = resolved
+        if base_url and "base_url" not in full_req:
+            full_req = f"base_url: {base_url}\n\n{full_req}"
+        if server_url and "server_url" not in full_req:
+            full_req = f"{full_req}\nserver_url: {server_url}"
 
-        logger.info(f"[{execution_id}] [PLAN] Cloning repository...")
-        repo_path, file_tree, chunked_docs = await _clone_and_chunk(repo_url, branch, auth_token, execution_id)
+        logger.info(f"[{execution_id}] [PLAN] requirements={requirements}, resolved={resolved}")
+        logger.info(f"[{execution_id}] [PLAN] scenario_serial={scenario_serial}, scenario_attempt={scenario_attempt}")
+        logger.info(f"[{execution_id}] [PLAN] Generating plan (no indexing)...")
+        result = await asyncio.to_thread(
+            _run_plan_pipeline, full_req,
+            execution_id, 0, scenario_serial or "00", scenario_attempt or "01"
+        )
 
-        logger.info(f"[{execution_id}] [PLAN] Generating {len(full_requirements)} plans in parallel...")
+        plan_path = None
+        s3_url = None
 
-        tasks = [
-            asyncio.to_thread(_run_plan_pipeline, chunked_docs, file_tree, req, execution_id, i, scenario_serial or "00", scenario_attempt or "01")
-            for i, req in enumerate(full_requirements)
-        ]
-        results = await asyncio.gather(*tasks)
-
-        plan_paths = []
-        plan_s3_urls = []
-
-        for i, result in enumerate(results):
-            if not (isinstance(result, dict) and result.get("status") == "success"):
-                logger.error(f"[{execution_id}] Plan {i+1} failed: {result.get('message')}")
-                plan_paths.append(None)
-                plan_s3_urls.append(None)
-                continue
+        if not (isinstance(result, dict) and result.get("status") == "success"):
+            logger.error(f"[{execution_id}] Plan failed: {result.get('message')}")
+        else:
             plan_path = result.get("saved_plan", "")
-            s3_url = None
             if plan_path and os.path.exists(plan_path):
-                s3_key = f"executions/{execution_id}/plan_{i+1}.xlsx"
+                plan_date = datetime.now().strftime("%Y%m%d")
+                plan_filename = _get_scenario_filename(scenario_serial or "00", "계획서", plan_date)
+                s3_key = f"executions/{execution_id}/{plan_filename}"
                 s3_url = await asyncio.to_thread(_upload_to_s3, plan_path, s3_key)
-            plan_paths.append(plan_path)
-            plan_s3_urls.append(s3_url)
 
         execution_store[execution_id] = {
             "execution_id": execution_id,
             "status": "PLAN_COMPLETED",
-            "plan_paths": plan_paths,
-            "plan_s3_urls": plan_s3_urls,
+            "plan_paths": [plan_path],
+            "plan_s3_urls": [s3_url],
             "repo_url": repo_url,
             "branch": branch,
-            "requirements": full_requirements,
+            "requirements": [full_req],
             "auth_token": auth_token,
             "scenario_serial": scenario_serial,
             "scenario_attempt": scenario_attempt,
@@ -600,10 +648,9 @@ async def generate_plan_background(
         }
         _save_store()
 
-        urls_str = ",".join(url for url in plan_s3_urls if url)
         await send_plan_callback(callback_url, PlanCallbackPayload(
             execution_id=execution_id,
-            plan_s3_url=urls_str if urls_str else None,
+            plan_s3_url=s3_url,
         ))
 
     except Exception as e:
@@ -613,12 +660,11 @@ async def generate_plan_background(
             plan_s3_url=None,
         ))
     finally:
-        if repo_path and os.path.exists(repo_path):
-            shutil.rmtree(repo_path)
+        pass
 
 
 async def execute_test_background(
-    execution_id: int, callback_url: str, plan_index: int = 0,
+    execution_id: int, callback_url: str,
 ):
     started_at = time.time()
     repo_path = None
@@ -629,30 +675,30 @@ async def execute_test_background(
 
         repo_url = store.get("repo_url", "")
         branch = store.get("branch", "main")
-        requirements = store.get("requirements", [store.get("requirement", "")])
+        requirements = store.get("requirements", [])
         server_url = store.get("server_url")
         auth_token = store.get("auth_token") or os.getenv("GITHUB_AUTH_TOKEN")
         scenario_serial = store.get("scenario_serial", "")
         scenario_attempt = store.get("scenario_attempt", "")
         scenario_id = f"T{scenario_serial}{scenario_attempt}"
 
-        requirement = requirements[plan_index] if plan_index < len(requirements) else requirements[0]
+        requirement = requirements[0] if requirements else ""
 
         if server_url and "server_url" not in requirement:
             requirement = f"{requirement}\nserver_url: {server_url}"
 
-        logger.info(f"[{execution_id}] [TEST] plan_index={plan_index}, Cloning repository...")
+        logger.info(f"[{execution_id}] [TEST] scenario_id={scenario_id}, Cloning repository...")
         repo_path, file_tree, chunked_docs = await _clone_and_chunk(repo_url, branch, auth_token, execution_id)
 
         logger.info(f"[{execution_id}] [TEST] Generating test code...")
 
-        plan_paths = store.get("plan_paths", [store.get("plan_path")])
-        plan_path_for_index = plan_paths[plan_index] if plan_index < len(plan_paths) else plan_paths[0]
+        plan_paths = store.get("plan_paths", [])
+        plan_path_for_index = plan_paths[0] if plan_paths else None
 
         if not plan_path_for_index or not os.path.exists(plan_path_for_index):
             from datetime import datetime as dt
             today = dt.now().strftime("%Y%m%d")
-            fallback = os.path.join(OUTPUT_DIR, f"{today}_{execution_id}_plan_{plan_index+1}.xlsx")
+            fallback = os.path.join(OUTPUT_DIR, f"{today}_{execution_id}_plan_1.xlsx")
             if os.path.exists(fallback):
                 plan_path_for_index = fallback
                 logger.info(f"[{execution_id}] Using fallback plan path: {fallback}")
@@ -661,7 +707,7 @@ async def execute_test_background(
             raise ValueError(f"계획서 파일을 찾을 수 없습니다. generate-plan을 먼저 실행하세요. (path={plan_path_for_index})")
 
         logger.info(f"[{execution_id}] plan_path_for_index={plan_path_for_index}, exists={os.path.exists(plan_path_for_index)}")
-        result = await asyncio.to_thread(_run_test_pipeline, chunked_docs, file_tree, requirement, execution_id, plan_path_for_index)
+        result = await asyncio.to_thread(_run_test_pipeline, chunked_docs, file_tree, requirement, execution_id, plan_path_for_index, scenario_serial)
 
         if not (isinstance(result, dict) and result.get("status") == "success"):
             raise ValueError(result.get("message", "Test generation failed"))
@@ -678,39 +724,71 @@ async def execute_test_background(
 
         report_s3_url = None
         if plan_path and os.path.exists(plan_path):
-            s3_key = f"executions/{execution_id}/plan_result_{plan_index+1}.xlsx"
+            result_date = datetime.now().strftime("%Y%m%d")
+            result_serial = store.get("scenario_serial", "00")
+            result_filename = _get_scenario_filename(result_serial, "결과보고서", result_date)
+            s3_key = f"executions/{execution_id}/{result_filename}"
             report_s3_url = await asyncio.to_thread(_upload_to_s3, plan_path, s3_key)
 
         spec_s3_url = None
         if spec_path and os.path.exists(spec_path):
-            s3_key = f"executions/{execution_id}/test_{plan_index+1}.spec.js"
+            s3_key = f"executions/{execution_id}/test_1.spec.js"
             spec_s3_url = await asyncio.to_thread(_upload_to_s3, spec_path, s3_key)
+
+        test_cases = result.get("test_cases", [])
 
         case_results = []
         for i, r in enumerate(pw_results):
-            case_number = str(i + 1).zfill(2)
-            case_id = f"{scenario_id}_{case_number}"
+            # case_name에서 test_case_number 파싱: "T0201_08 - 비밀번호..." → "T0201_08", "비밀번호..."
+            raw_name = r.get("case_name", "")
+            if " - " in raw_name:
+                parsed_number, parsed_name = raw_name.split(" - ", 1)
+                parsed_number = parsed_number.strip()
+                parsed_name = parsed_name.strip()
+            else:
+                case_number = str(i + 1).zfill(2)
+                parsed_number = f"{scenario_id}_{case_number}"
+                parsed_name = raw_name
+
             screenshot_s3_urls = []
             screenshot_path = os.path.join(
                 "/home/ec2-user/AI/test-results",
                 f"screenshot_{str(i+1).zfill(3)}.png"
             )
+            s3_key = f"executions/{execution_id}/screenshots/screenshot_{str(i+1).zfill(3)}.png"
             if os.path.exists(screenshot_path):
-                s3_key = f"executions/{execution_id}/screenshots/screenshot_{str(i+1).zfill(3)}.png"
                 with open(screenshot_path, "rb") as f:
                     screenshot_bytes = f.read()
-                url = await asyncio.to_thread(
-                    _upload_bytes_to_s3, screenshot_bytes, s3_key, "image/png"
-                )
-                if url:
-                    screenshot_s3_urls.append(url)
+            else:
+                # 스크린샷 없으면 흰 이미지 전송
+                screenshot_bytes = _create_white_png()
+            url = await asyncio.to_thread(
+                _upload_bytes_to_s3, screenshot_bytes, s3_key, "image/png"
+            )
+            if url:
+                screenshot_s3_urls.append(url)
+
+            tc = test_cases[i] if i < len(test_cases) else {}
+            status_text = "정상" if r.get("status") == "SUCCESS" else "결함"
+            scenario_detail = ScenarioDetail(
+                scenarioName=tc.get("scenario_name"),
+                description=tc.get("description"),
+                testCaseId=tc.get("case_id", parsed_number),
+                testCaseName=tc.get("case_name"),
+                precondition=tc.get("precondition"),
+                testData=tc.get("test_data"),
+                executionSteps=tc.get("steps"),
+                result=status_text,
+            )
 
             case_results.append(TestCaseResult(
-                test_case_number=case_id,
-                case_name=r.get("case_name"),
+                test_case_number=parsed_number,
+                case_name=parsed_name,
                 status="PASS" if r.get("status") == "SUCCESS" else "FAIL",
+                duration_seconds=r.get("duration_seconds"),
                 error_log=r.get("error_log"),
                 screenshot_s3_urls=screenshot_s3_urls,
+                scenario_detail=scenario_detail,
             ))
 
         overall_status = "COMPLETED"
@@ -719,22 +797,28 @@ async def execute_test_background(
 
         execution_store[execution_id].update({
             "status": overall_status,
-            "test_code": result.get("test_code", ""),
             "plan_s3_url": report_s3_url,
             "spec_s3_url": spec_s3_url,
             "results": [r.model_dump() for r in case_results],
         })
         _save_store()
 
-        duration_seconds = round(time.time() - started_at, 1)
-        await send_test_callback(callback_url, TestCallbackPayload(
-            execution_id=execution_id,
-            status=overall_status,
-            duration_seconds=duration_seconds,
-            plan_result_s3_url=report_s3_url,
-            test_spec_s3_url=spec_s3_url,
-            results=case_results,
-        ))
+        total_duration = round(time.time() - started_at, 1)
+
+        # 케이스별 개별 콜백 전송 (마지막 케이스만 COMPLETED, 나머지는 TESTING)
+        for i, case_result in enumerate(case_results):
+            is_last = (i == len(case_results) - 1)
+            logger.info(f"[{execution_id}] Sending callback: case={case_result.test_case_number}, status={case_result.status}, is_last={is_last}")
+            await send_test_callback(callback_url, TestCallbackPayload(
+                execution_id=execution_id,
+                status="COMPLETED",
+                duration_seconds=case_result.duration_seconds,
+                plan_result_s3_url=report_s3_url if is_last else None,
+                test_spec_s3_url=spec_s3_url if is_last else None,
+                results=[case_result],
+            ))
+
+        logger.info(f"[{execution_id}] Sent {len(case_results)} individual callbacks")
 
     except Exception as e:
         logger.error(f"[{execution_id}] [TEST] Job failed: {e}", exc_info=True)
@@ -742,12 +826,6 @@ async def execute_test_background(
             execution_id=execution_id,
             status="FAILED",
             duration_seconds=round(time.time() - started_at, 1),
-            results=[TestCaseResult(
-                test_case_number="0",
-                case_name="Error",
-                status="FAIL",
-                error_log=str(e),
-            )],
         ))
     finally:
         if repo_path and os.path.exists(repo_path):
@@ -809,7 +887,6 @@ async def execute_test(request: ExecuteTestRequest, background_tasks: Background
         execute_test_background,
         request.execution_id,
         request.callback_url,
-        request.plan_index,
     )
     return Response(status_code=202)
 

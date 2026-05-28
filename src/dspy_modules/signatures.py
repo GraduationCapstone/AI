@@ -8,6 +8,9 @@ class TestPlanGenerationSignature(dspy.Signature):
     - Base ONLY on components, routes, and functions that actually exist in the code_context.
     - Focus ONLY on the scenario described in requirement. Do NOT overlap with other scenarios.
     - If base_url is provided in requirement, use it as the target URL for test cases.
+    - NEVER use test id. Default loginid is 'danimo1'. Use this for all login tests unless specified otherwise.
+    - NEVER use test password. Default password is '1234'. Use this for all login tests unless specified otherwise
+    - Generate AT MOST 7 test cases.
     - If server_url is provided in requirement, include E2E test cases that verify both frontend UI and backend API responses.
     - Output ONLY a raw JSON array. No markdown, no backticks, no explanation.
     """
@@ -54,6 +57,21 @@ class TestCodeGenerationSignature(dspy.Signature):
     - If server_url is in the plan, define: const SERVER_URL = 'https://...'; and use page.request or fetch for API verification.
     - ALL page.goto() calls MUST use absolute URLs. Never use relative paths like '/path'.
     - Every test() block MUST use try/finally to guarantee screenshot.
+    - NEVER use page.waitForLoadState('networkidle'). Always use page.waitForLoadState('domcontentloaded') instead to avoid timeout issues.
+    - NEVER use test id. Default loginid is 'danimo1'. Use this for all login tests unless specified otherwise.
+    - NEVER use test password. Default password is '1234'. Use this for all login tests unless specified otherwise.
+    - If the scenario requires login, ALWAYS perform login at the start of each test that needs authentication. Use selectors found in code_context.
+    - Default test account credentials: loginId='danimo1', password='1234'. Use these unless the requirement specifies otherwise.
+    - In loginUser function, ALWAYS add { timeout: 5000 } to all expect assertions to avoid long waits: await expect(page).not.toHaveURL('/login', { timeout: 5000 }).
+    - NEVER use waitForTimeout values greater than 1000ms. Replace long waits with waitForLoadState('domcontentloaded').
+    - test.setTimeout must be set to 30000 (30 seconds) not 60000, to fail fast.
+    - NEVER use expect(pageContent).toBeTruthy() or expect(bodyVisible).toBeTruthy() as the only assertion. Always verify specific UI elements, URLs, or data.
+    - After login, ALWAYS verify success by checking the URL does not contain '/login' or by checking a specific authenticated element.
+    - After clicking login button, use await page.waitForURL('**/home', { timeout: 10000 }).catch(() => {}) before checking URL to allow redirect to complete.
+    - After filter/sort actions, verify the result by checking element count changes, specific text content, or absence of error pages.
+    - After form submission, verify success by checking for success messages, URL changes, or updated data in the DOM.
+    - For error cases, verify specific error messages appear using expect(element).toBeVisible() or expect(text).toContain('...').
+    - NEVER hardcode year values (e.g. '2026'). Use dynamic checks or regex patterns instead.
     - Output ONLY pure JavaScript code. No markdown, no backticks, no explanation.
     """
 
@@ -79,6 +97,15 @@ class TestCodeGenerationSignature(dspy.Signature):
             "   }\n"
             "6. Use only selectors found in code_context: #id, [name='x'], [placeholder='x'], text='x'.\n"
             "7. Never use Styled-components random class names (e.g. .sc-abc).\n"
-            "8. Output ONLY valid JavaScript code. No markdown, no backticks, no comments outside code."
+            "8. NEVER use expect(pageContent).toBeTruthy() or expect(body).isVisible() as the only assertion.\n"
+            "9. Always use meaningful assertions:\n"
+            "   - URL check: expect(page.url()).not.toContain('/login')\n"
+            "   - Element visibility: await expect(page.locator('selector')).toBeVisible()\n"
+            "   - Text content: await expect(page.locator('selector')).toContainText('...')\n"
+            "   - Element count: expect(await page.locator('selector').count()).toBeGreaterThan(0)\n"
+            "   - No error page: expect(await page.locator('text=500, text=오류').count()).toBe(0)\n"
+            "10. For scenarios requiring login, define a reusable loginUser(page) function at the top of test.describe and call it in each test.\n"
+            "    Use default credentials: loginId='danimo1', password='1234' unless otherwise specified.\n"
+            "11. Output ONLY valid JavaScript code. No markdown, no backticks, no comments outside code."
         )
     )

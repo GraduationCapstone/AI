@@ -198,7 +198,7 @@ class RAGPipeline:
     def retrieve_context(
         self,
         requirement: str,
-        top_k: int = 5,
+        top_k: int = 15,
         max_chars: int = 12000,
         file_tree: Optional[str] = None
     ) -> str:

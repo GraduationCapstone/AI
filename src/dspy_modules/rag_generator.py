@@ -47,11 +47,12 @@ class RAGPlaywrightGenerator(dspy.Module):
     # ── STEP 1: 계획서 생성 ──────────────────────────────────────────────────
 
     def generate_plan_only(self, requirement: str, **kwargs) -> Dict[str, Any]:
-        top_k = kwargs.get("top_k", 5)
+        """STEP 1: RAG 검색 없이 시나리오명만으로 계획서 생성"""
         execution_id = kwargs.get("execution_id", 0)
         plan_index = kwargs.get("plan_index", 0)
         try:
-            code_context = self.rag_pipeline.retrieve_context(requirement=requirement, top_k=top_k, max_chars=12000)
+            # 계획서 생성은 레포 코드 없이 시나리오 도메인 지식만으로 생성
+            code_context = "No repository context. Generate test plan based on scenario description only."
             plan_prediction = self.plan_generator(
                 requirement=requirement,
                 code_context=code_context,
@@ -73,16 +74,63 @@ class RAGPlaywrightGenerator(dspy.Module):
 
     # ── STEP 2: 테스트 코드 생성 ─────────────────────────────────────────────
 
+    # 시나리오별 영어 검색 쿼리 (레포 코드가 영어라 한글 쿼리보다 유사도 높음)
+    SCENARIO_SEARCH_QUERIES = {
+        "01": ["signup register route path", "signup form input validation", "register API endpoint"],
+        "02": ["login route path URL", "login form input placeholder submit button", "auth login API endpoint"],
+        "03": ["password reset forgot route", "password reset form input", "password reset API"],
+        "04": ["logout route", "logout button handler", "logout API session"],
+        "05": ["profile edit form input", "profile update API endpoint", "mypage route"],
+        "06": ["password change form input", "password update API endpoint"],
+        "07": ["role permission access control route", "protected route guard"],
+        "08": ["session token expiry refresh", "token validation middleware"],
+        "09": ["post create form input", "post write API endpoint", "board route"],
+        "10": ["post edit update delete form", "post update delete API endpoint"],
+        "11": ["comment create edit delete form", "comment API endpoint"],
+        "12": ["like favorite toggle button", "like API endpoint"],
+        "13": ["search input form", "search API endpoint filter"],
+        "14": ["filter sort dropdown button", "filter API query params"],
+        "15": ["responsive layout media query viewport", "mobile header nav"],
+        "16": ["browser compatibility CSS font", "header navigation layout"],
+        "17": ["404 500 error page not found", "error boundary route"],
+        "18": ["network offline error handling", "fetch error catch"],
+        "19": ["loading spinner skeleton delay", "async API slow response"],
+        "20": ["API error response handling", "fetch catch error message"],
+        "21": ["AB test variant feature flag", "experiment toggle"],
+        "22": ["form validation input error message", "validation rules"],
+        "23": ["language locale i18n translation", "language switch button"],
+        "24": ["file upload download input", "file API endpoint"],
+        "25": ["push notification alert", "notification API"],
+        "26": ["concurrent user session multiple", "concurrent access"],
+    }
+
     def generate_code_only(self, requirement: str, **kwargs) -> Dict[str, Any]:
         top_k = kwargs.get("top_k", 5)
         execution_id = kwargs.get("execution_id", 0)
         plan_path = kwargs.get("plan_path", None)
+        scenario_serial = kwargs.get("scenario_serial", "")
 
         try:
-            code_context = self.rag_pipeline.retrieve_context(
-                requirement=requirement, top_k=top_k, max_chars=12000,
-                file_tree=getattr(self, "file_tree", None)
-            )
+            # 시나리오별 영어 쿼리로 다중 검색 후 컨텍스트 합산
+            search_queries = self.SCENARIO_SEARCH_QUERIES.get(scenario_serial, [requirement])
+            if not search_queries:
+                search_queries = [requirement]
+
+            contexts = []
+            seen_chunks = set()
+            per_query_chars = max(3000, 12000 // len(search_queries))
+
+            for query in search_queries:
+                ctx = self.rag_pipeline.retrieve_context(
+                    requirement=query, top_k=top_k, max_chars=per_query_chars,
+                    file_tree=getattr(self, "file_tree", None)
+                )
+                if ctx and ctx not in seen_chunks:
+                    contexts.append(ctx)
+                    seen_chunks.add(ctx)
+
+            code_context = "\n\n".join(contexts)
+            logger.info(f"[{execution_id}] Multi-query RAG: {len(search_queries)} queries, total context {len(code_context)} chars")
 
             test_cases = []
             logger.info(f"[{execution_id}] generate_code_only plan_path={plan_path}, exists={os.path.exists(plan_path) if plan_path else False}")
