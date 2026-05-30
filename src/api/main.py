@@ -99,7 +99,8 @@ class GeneratePlanRequest(BaseModel):
     server_url: Optional[str] = None
     auth_token: Optional[str] = None
     callback_url: str = ""
-    group_name: Optional[str] = None  # 테스트명 (파일명 및 테스터 컬럼에 사용)
+    group_name: Optional[str] = None  # 테스트명 (파일명에 사용)
+    tester_name: Optional[str] = None  # 계정명 (엑셀 테스터 컬럼에 사용)
 
     @property
     def branch(self) -> str:
@@ -360,22 +361,20 @@ def _run_test_pipeline(chunked_docs, file_tree: str, requirement: str, execution
 
 
 def _parse_test_cases_from_spec(spec_path: str) -> Dict[str, str]:
-    """spec.js 파일에서 케이스ID별 테스트 코드 파싱"""
     result = {}
     if not spec_path or not os.path.exists(spec_path):
         return result
     try:
         with open(spec_path, "r", encoding="utf-8") as f:
             content = f.read()
-        # test('T0201_01 - ...', async ({ page }) => { ... }); 패턴 파싱
+
         pattern = re.compile(
-            r"test\((['\"])([^'\"]+)\1,\s*async\s*\([^)]*\)\s*=>\s*\{" ,
+            r"test\(['\"]([^'\"]+)['\"],\s*async\s*\([^)]*\)\s*=>\s*\{",
             re.MULTILINE
         )
         matches = list(pattern.finditer(content))
         for idx, match in enumerate(matches):
-            case_title = match.group(1).strip()
-            # 케이스 ID 추출 (T0201_01 형식)
+            case_title = match.group(1).strip()  # "T0801_01 - 비로그인 상태..."
             id_match = re.match(r"(T\d{4}_\d{2})", case_title)
             case_id = id_match.group(1) if id_match else case_title
             start = match.start()
@@ -591,6 +590,7 @@ async def generate_plan_background(
     server_url: Optional[str] = None,
     base_url: Optional[str] = None,
     group_name: Optional[str] = None,
+    tester_name: Optional[str] = None,
 ):
     SCENARIO_MAP = {
         "01": "회원가입 시나리오 테스트 계획서 작성",
@@ -676,6 +676,8 @@ async def generate_plan_background(
             "scenario_attempt": scenario_attempt,
             "server_url": server_url,
             "group_name": group_name or "",
+            "tester_name": tester_name or "user",
+            "tester_name": tester_name or "user",
         }
         _save_store()
 
@@ -751,7 +753,7 @@ async def execute_test_background(
         logger.info(f"[{execution_id}] [TEST] Playwright done: {len(pw_results)} results")
 
         if plan_path and os.path.exists(plan_path):
-            await asyncio.to_thread(_update_excel_with_results, plan_path, pw_results, store.get("group_name", "user"))
+            await asyncio.to_thread(_update_excel_with_results, plan_path, pw_results, store.get("tester_name", "user"))
 
         report_s3_url = None
         if plan_path and os.path.exists(plan_path):
@@ -818,15 +820,16 @@ async def execute_test_background(
                 result=status_text,
             )
 
-            case_test_code = spec_code_map.get(parsed_number)
+            is_pass = r.get("status") == "SUCCESS"
+            case_test_code = None if is_pass else spec_code_map.get(parsed_number)
             case_results.append(TestCaseResult(
                 test_case_number=parsed_number,
                 case_name=parsed_name,
-                test_code_name=spec_filename,
-                status="PASS" if r.get("status") == "SUCCESS" else "FAIL",
+                test_code_name=parsed_number,        # "T0801_01" 형식으로
+                status="PASS" if is_pass else "FAIL",
                 duration_seconds=r.get("duration_seconds"),
                 error_log=r.get("error_log"),
-                test_code=case_test_code,
+                test_code=case_test_code,            # FAIL일 때만 해당 케이스 코드
                 screenshot_s3_urls=screenshot_s3_urls,
                 scenario_detail=scenario_detail,
             ))
@@ -912,6 +915,7 @@ async def generate_plan(request: GeneratePlanRequest, background_tasks: Backgrou
         request.server_url,
         str(request.base_url) if request.base_url else None,
         request.group_name,
+        request.tester_name,
     )
     return Response(status_code=202)
 

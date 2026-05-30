@@ -7,7 +7,7 @@ class TestPlanGenerationSignature(dspy.Signature):
     Rules:
     - Base ONLY on components, routes, and functions that actually exist in the code_context.
     - Focus ONLY on the scenario described in requirement. Do NOT overlap with other scenarios.
-    - At least 7 test cases generated.
+    - Only generate 5 cases per scenario. Do NOT create more than 7 cases, even if you can think of more.
     - Only use loiginId :danimo1 and password:1234 for login test cases, unless requirement specifies otherwise.
     - If base_url is provided in requirement, use it as the target URL for test cases.
     - If server_url is provided in requirement, include E2E test cases that verify both frontend UI and backend API responses.
