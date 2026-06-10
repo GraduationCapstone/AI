@@ -361,20 +361,22 @@ def _run_test_pipeline(chunked_docs, file_tree: str, requirement: str, execution
 
 
 def _parse_test_cases_from_spec(spec_path: str) -> Dict[str, str]:
+    """spec.js 파일에서 케이스ID별 테스트 코드 파싱"""
     result = {}
     if not spec_path or not os.path.exists(spec_path):
         return result
     try:
         with open(spec_path, "r", encoding="utf-8") as f:
             content = f.read()
-
+        # test('T0201_01 - ...', async ({ page }) => { ... }); 패턴 파싱
         pattern = re.compile(
-            r"test\(['\"]([^'\"]+)['\"],\s*async\s*\([^)]*\)\s*=>\s*\{",
+            r"test\((['\"])([^'\"]+)\1,\s*async\s*\([^)]*\)\s*=>\s*\{" ,
             re.MULTILINE
         )
         matches = list(pattern.finditer(content))
         for idx, match in enumerate(matches):
-            case_title = match.group(1).strip()  # "T0801_01 - 비로그인 상태..."
+            case_title = match.group(2).strip()
+            # 케이스 ID 추출 (T0201_01 형식)
             id_match = re.match(r"(T\d{4}_\d{2})", case_title)
             case_id = id_match.group(1) if id_match else case_title
             start = match.start()
@@ -821,15 +823,15 @@ async def execute_test_background(
             )
 
             is_pass = r.get("status") == "SUCCESS"
-            case_test_code = None if is_pass else spec_code_map.get(parsed_number)
+            case_test_code = spec_code_map.get(parsed_number)
             case_results.append(TestCaseResult(
                 test_case_number=parsed_number,
                 case_name=parsed_name,
-                test_code_name=parsed_number,        # "T0801_01" 형식으로
+                test_code_name=spec_filename,
                 status="PASS" if is_pass else "FAIL",
                 duration_seconds=r.get("duration_seconds"),
                 error_log=r.get("error_log"),
-                test_code=case_test_code,            # FAIL일 때만 해당 케이스 코드
+                test_code=case_test_code,
                 screenshot_s3_urls=screenshot_s3_urls,
                 scenario_detail=scenario_detail,
             ))
